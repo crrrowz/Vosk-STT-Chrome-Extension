@@ -33,7 +33,7 @@
 ### From Source (Developer Mode)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/vosk-stt-extension.git
+git clone https://github.com/crrrowz/vosk-stt-extension.git
 ```
 
 1. Open `chrome://extensions`
