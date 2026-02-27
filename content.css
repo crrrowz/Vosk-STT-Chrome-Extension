@@ -1,0 +1,337 @@
+/* ===== Vosk STT Overlay ===== */
+
+#vosk-stt-overlay {
+    position: fixed;
+    z-index: 2147483647;
+    pointer-events: none;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    direction: auto;
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+#vosk-stt-overlay.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+#vosk-stt-overlay.fade-out {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.vosk-stt-card {
+    background: rgba(15, 15, 26, 0.92);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(108, 60, 225, 0.25);
+    border-radius: 14px;
+    padding: 12px 16px;
+    min-width: 220px;
+    max-width: 420px;
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.4),
+        0 0 0 1px rgba(108, 60, 225, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.vosk-stt-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.vosk-stt-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e13c5e;
+    animation: vosk-pulse 1.4s infinite;
+}
+
+@keyframes vosk-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        box-shadow: 0 0 0 0 rgba(225, 60, 94, 0.5);
+    }
+
+    50% {
+        opacity: 0.7;
+        box-shadow: 0 0 0 6px rgba(225, 60, 94, 0);
+    }
+}
+
+.vosk-stt-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #9898b0;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.vosk-stt-waves {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-inline-start: auto;
+}
+
+.vosk-stt-wave {
+    width: 3px;
+    border-radius: 2px;
+    background: linear-gradient(to top, #6C3CE1, #4F8FFF);
+    animation: vosk-wave 0.8s ease-in-out infinite;
+    animation-play-state: paused;
+    transform: scaleY(0.3);
+}
+
+/* Animate only when speech detected */
+.vosk-stt-card.speaking .vosk-stt-wave {
+    animation-play-state: running;
+}
+
+.vosk-stt-wave:nth-child(1) {
+    height: 8px;
+    animation-delay: 0s;
+}
+
+.vosk-stt-wave:nth-child(2) {
+    height: 14px;
+    animation-delay: 0.15s;
+}
+
+.vosk-stt-wave:nth-child(3) {
+    height: 10px;
+    animation-delay: 0.3s;
+}
+
+.vosk-stt-wave:nth-child(4) {
+    height: 16px;
+    animation-delay: 0.45s;
+}
+
+.vosk-stt-wave:nth-child(5) {
+    height: 8px;
+    animation-delay: 0.6s;
+}
+
+@keyframes vosk-wave {
+
+    0%,
+    100% {
+        transform: scaleY(0.5);
+    }
+
+    50% {
+        transform: scaleY(1);
+    }
+}
+
+.vosk-stt-text {
+    font-size: 15px;
+    line-height: 1.5;
+    color: #e4e4f0;
+    min-height: 22px;
+    word-break: break-word;
+    direction: auto;
+    unicode-bidi: plaintext;
+}
+
+.vosk-stt-text .partial {
+    color: #7a7a9a;
+    font-style: italic;
+}
+
+.vosk-stt-text .final {
+    color: #e4e4f0;
+}
+
+.vosk-stt-done {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(108, 60, 225, 0.15);
+    font-size: 11px;
+    color: #4ecf7a;
+}
+
+.vosk-stt-done svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* ===== Floating Action Button ===== */
+
+#vosk-fab {
+    position: fixed;
+    z-index: 2147483646;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: none;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #6C3CE1, #4F8FFF);
+    box-shadow:
+        0 4px 20px rgba(108, 60, 225, 0.4),
+        0 0 0 3px rgba(108, 60, 225, 0.15);
+    transition: box-shadow 0.3s, transform 0.2s;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#vosk-fab:hover {
+    transform: scale(1.08);
+    box-shadow:
+        0 6px 28px rgba(108, 60, 225, 0.5),
+        0 0 0 4px rgba(108, 60, 225, 0.2);
+}
+
+#vosk-fab:active {
+    cursor: grabbing;
+}
+
+#vosk-fab.recording {
+    background: linear-gradient(135deg, #e13c5e, #ff4f6f);
+    box-shadow:
+        0 4px 20px rgba(225, 60, 94, 0.5),
+        0 0 0 3px rgba(225, 60, 94, 0.2);
+    animation: vosk-fab-pulse 1.8s infinite;
+}
+
+@keyframes vosk-fab-pulse {
+
+    0%,
+    100% {
+        box-shadow:
+            0 4px 20px rgba(225, 60, 94, 0.4),
+            0 0 0 3px rgba(225, 60, 94, 0.15);
+    }
+
+    50% {
+        box-shadow:
+            0 4px 30px rgba(225, 60, 94, 0.6),
+            0 0 0 8px rgba(225, 60, 94, 0.08);
+    }
+}
+
+#vosk-fab svg {
+    width: 26px;
+    height: 26px;
+    fill: white;
+    pointer-events: none;
+    transition: transform 0.2s;
+}
+
+#vosk-fab.recording svg {
+    animation: vosk-mic-bounce 0.6s ease;
+}
+
+@keyframes vosk-mic-bounce {
+    0% {
+        transform: scale(1);
+    }
+
+    30% {
+        transform: scale(0.8);
+    }
+
+    60% {
+        transform: scale(1.15);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* FAB language badge */
+#vosk-fab-lang {
+    position: absolute;
+    bottom: -4px;
+    right: -4px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #1a1a2e;
+    border: 2px solid #6C3CE1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 700;
+    color: #e4e4f0;
+    font-family: 'Segoe UI', sans-serif;
+    pointer-events: none;
+}
+
+#vosk-fab.recording #vosk-fab-lang {
+    border-color: #e13c5e;
+}
+
+/* ===== Split FAB ===== */
+
+#vosk-fab.split {
+    width: 104px;
+    height: 52px;
+    border-radius: 26px;
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+    flex-direction: row;
+}
+
+#vosk-fab.split svg {
+    display: none;
+}
+
+#vosk-fab.split #vosk-fab-lang {
+    display: none;
+}
+
+#vosk-fab.split:hover {
+    transform: none;
+}
+
+.vosk-fab-half {
+    width: 52px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    font-family: 'Segoe UI', sans-serif;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    transition: all 0.2s;
+    pointer-events: auto;
+}
+
+.vosk-fab-half:first-child {
+    border-right: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.vosk-fab-half:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
+.vosk-fab-half.active-lang {
+    background: rgba(108, 60, 225, 0.35);
+    color: #fff;
+}
+
+#vosk-fab.split.recording .vosk-fab-half.active-lang {
+    background: rgba(225, 60, 94, 0.45);
+}

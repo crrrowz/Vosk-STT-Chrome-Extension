@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vosk STT</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-icon">🎙️</div>
+      <div>
+        <h1>Vosk STT</h1>
+        <p class="subtitle">Voice → Text</p>
+      </div>
+    </div>
+
+    <div class="lang-row">
+      <button class="lang-chip active" data-lang="ar-IQ">عربي</button>
+      <button class="lang-chip" data-lang="en-US">EN</button>
+    </div>
+
+    <div class="toggle-row">
+      <label class="toggle-label" for="splitToggle">⚡ Quick Switch</label>
+      <label class="switch">
+        <input type="checkbox" id="splitToggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <button id="toggleBtn" class="main-btn">🎤 Show Mic Button</button>
+    <button id="pickBtn" class="pick-btn">🎯 Pick Input Field</button>
+
+    <div class="shortcuts">
+      <div class="shortcut-row"><kbd>Alt + S</kbd><span>Record</span></div>
+      <div class="shortcut-row"><kbd>Alt + L</kbd><span>Switch Lang</span></div>
+      <div class="shortcut-row"><kbd>Alt + P</kbd><span>Pick Input</span></div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
