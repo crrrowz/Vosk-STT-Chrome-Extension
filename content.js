@@ -11,6 +11,7 @@
     let fab = null;
     let currentLang = 'ar-IQ';
     let splitFab = false;
+    let pendingLangStart = null;
 
 
     const LANG_LABELS = {
@@ -66,12 +67,16 @@
             e.preventDefault();
             e.stopPropagation();
 
-            // In split mode, clicks are handled by the halves
-            if (splitFab) return;
-
+            // In split mode, clicks on the halves have their propagation stopped,
+            // so this handler only triggers when clicking the central mic icon to play/pause.
             if (isRecording) {
                 stopRecognition();
             } else {
+                if (!chrome.runtime?.id) {
+                    console.warn('Vosk STT: Extension context invalidated. Please refresh the page.');
+                    removeFab();
+                    return;
+                }
                 chrome.storage?.local?.get(['sttLang'], (r) => {
                     currentLang = r?.sttLang || 'ar-IQ';
                     updateFabLang();
@@ -125,14 +130,21 @@
         }
 
         currentLang = lang;
-        chrome.storage?.local?.set({ sttLang: lang });
+        try {
+            if (chrome.runtime?.id) chrome.storage?.local?.set({ sttLang: lang });
+        } catch (e) { }
+
         updateSplitActive();
 
         if (isRecording) {
-            sendEngineCommand('stop');
-            isRecording = false;
-            setTimeout(() => startRecognition(lang), 300);
+            pendingLangStart = lang;
+            stopRecognition();
         } else {
+            if (!chrome.runtime?.id) {
+                console.warn('Vosk STT: Extension context invalidated. Please refresh the page.');
+                removeFab();
+                return;
+            }
             startRecognition(lang);
         }
     }
@@ -393,6 +405,11 @@
                 updateFabState();
                 hideOverlay();
                 try { chrome.runtime.sendMessage({ action: 'stopped' }); } catch (e) { }
+                if (pendingLangStart) {
+                    const nextLang = pendingLangStart;
+                    pendingLangStart = null;
+                    setTimeout(() => startRecognition(nextLang), 100);
+                }
                 break;
         }
     });
@@ -642,15 +659,23 @@
 
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (msg.action === 'ping') { sendResponse({ ok: true }); return true; }
+        if (msg.action === 'checkFab') {
+            sendResponse({ hasFab: !!fab });
+            return true;
+        }
         if (msg.action === 'showFab') {
-            chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
-                currentLang = r?.sttLang || 'ar-IQ';
-                splitFab = !!r?.splitFab;
-                if (!fab) createFab();
-                else renderFabContent();
-                updateFabLang();
-            });
-            sendResponse({ ok: true });
+            if (fab) {
+                removeFab();
+                sendResponse({ ok: true });
+            } else {
+                chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
+                    currentLang = r?.sttLang || 'ar-IQ';
+                    splitFab = !!r?.splitFab;
+                    createFab();
+                    updateFabLang();
+                    sendResponse({ ok: true });
+                });
+            }
         } else if (msg.action === 'setLang') {
             currentLang = msg.lang || 'ar-IQ';
             updateFabLang();

@@ -28,6 +28,21 @@
         if (splitToggle) splitToggle.checked = !!r?.splitFab;
     });
 
+    // Check if FAB is visible to set toggle button text
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+        if (!tab) return;
+        try {
+            await ensureContentScript(tab.id, tab.url);
+            chrome.tabs.sendMessage(tab.id, { action: 'checkFab' }, (response) => {
+                if (response?.hasFab) {
+                    toggleBtn.textContent = 'Hide Mic Button';
+                }
+            });
+        } catch (e) {
+            // Ignore errors here, just keep default text
+        }
+    });
+
     // Language chip toggle
     langChips.forEach(chip => {
         chip.addEventListener('click', async () => {
