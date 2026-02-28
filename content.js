@@ -401,6 +401,7 @@
             }
 
             case 'stopped':
+                if (!isRecording && !pendingLangStart) break; // Already stopped, ignore duplicate
                 isRecording = false;
                 updateFabState();
                 hideOverlay();
@@ -647,6 +648,10 @@
         isRecording = true;
         updateFabState();
         showOverlay();
+        // Notify background to stop any other tab's recording
+        try {
+            chrome.runtime.sendMessage({ action: 'startRecordingFromTab', tabId: 'self' });
+        } catch (e) { }
         setTimeout(() => sendEngineCommand('start', lang), 100);
     }
 
@@ -741,6 +746,14 @@
             e.preventDefault();
             pickerActive ? stopPicker() : startPicker();
         }
+    });
+
+    // Auto-show FAB by default on page load
+    chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
+        currentLang = r?.sttLang || 'ar-IQ';
+        splitFab = !!r?.splitFab;
+        createFab();
+        updateFabLang();
     });
 
     console.log('[Vosk STT] Content script loaded');

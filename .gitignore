@@ -7,3 +7,4 @@ Thumbs.db
 *.pem
 .idea/
 .vscode/
+/audit file

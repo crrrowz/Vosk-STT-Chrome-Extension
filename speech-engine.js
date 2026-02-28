@@ -12,6 +12,7 @@
     let shouldBeRunning = false;
     let currentLang = 'ar-IQ';
     let restartCount = 0;
+    let stopGeneration = 0; // Incremented on every stop to invalidate pending restarts
     const MAX_RESTARTS = 50;
 
     /* ═══════════════════════════════════════════
@@ -238,6 +239,9 @@
     }
 
     function startRecognition(lang) {
+        // Guard: don't start if stop was requested
+        if (!shouldBeRunning) return;
+
         if (recognition) { try { recognition.abort(); } catch (e) { } recognition = null; }
 
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -250,6 +254,8 @@
         recognition.maxAlternatives = 1;
 
         let emittedLength = 0;
+        // Capture the current generation so stale onend handlers won't restart
+        const myGeneration = stopGeneration;
 
         recognition.onstart = () => emit('started', {});
         recognition.onaudiostart = () => emit('audiostart', {});
@@ -302,9 +308,18 @@
 
         recognition.onend = () => {
             recognition = null;
+            // If generation changed, a stop was issued — don't restart
+            if (myGeneration !== stopGeneration) {
+                emit('stopped', {});
+                return;
+            }
             if (shouldBeRunning && restartCount < MAX_RESTARTS) {
                 restartCount++;
-                setTimeout(() => { if (shouldBeRunning) startRecognition(currentLang); }, 200);
+                setTimeout(() => {
+                    if (shouldBeRunning && myGeneration === stopGeneration) {
+                        startRecognition(currentLang);
+                    }
+                }, 200);
             } else if (shouldBeRunning) {
                 shouldBeRunning = false;
                 emit('stopped', {});
@@ -319,7 +334,12 @@
 
     function stopRecognition() {
         shouldBeRunning = false;
-        if (recognition) { try { recognition.stop(); } catch (e) { } }
+        stopGeneration++; // Invalidate any pending restart timeouts
+        if (recognition) {
+            try { recognition.abort(); } catch (e) { }
+            recognition = null;
+        }
+        emit('stopped', {});
     }
 
     // Register cleanup for re-injection
