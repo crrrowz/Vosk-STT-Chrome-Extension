@@ -240,6 +240,7 @@
         let isDragging = false;
         let startX, startY, initRight, initBottom;
         let hasMoved = false;
+        let dragRaf = null;
 
         el.addEventListener('mousedown', onDown);
         el.addEventListener('touchstart', onDown, { passive: false });
@@ -264,7 +265,7 @@
             document.addEventListener('touchmove', onMove, { passive: false });
             document.addEventListener('touchend', onUp);
 
-            if (e.touches) e.preventDefault();
+            if (e.touches && e.cancelable) e.preventDefault();
         }
 
         function onMove(e) {
@@ -276,18 +277,49 @@
             if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
             if (!hasMoved) return;
 
-            let newRight = initRight - dx;
-            let newBottom = initBottom - dy;
+            if (e.touches && typeof e.preventDefault === 'function' && e.cancelable) e.preventDefault();
 
-            newRight = Math.max(4, Math.min(newRight, window.innerWidth - el.offsetWidth - 4));
-            newBottom = Math.max(4, Math.min(newBottom, window.innerHeight - el.offsetHeight - 4));
+            if (dragRaf) return;
+            dragRaf = requestAnimationFrame(() => {
+                dragRaf = null;
 
-            el.style.right = newRight + 'px';
-            el.style.bottom = newBottom + 'px';
-            el.style.left = '';
-            el.style.top = '';
+                // READ properties first to avoid layout thrashing
+                const winW = window.innerWidth;
+                const winH = window.innerHeight;
+                const elW = el.offsetWidth;
+                const elH = el.offsetHeight;
+                let overlayOh = 0;
+                if (overlay) {
+                    overlayOh = overlay.offsetHeight || 80;
+                }
 
-            if (e.touches) e.preventDefault();
+                // CALCULATE new positions
+                let newRight = initRight - dx;
+                let newBottom = initBottom - dy;
+
+                newRight = Math.max(4, Math.min(newRight, winW - elW - 4));
+                newBottom = Math.max(4, Math.min(newBottom, winH - elH - 4));
+
+                let overlayTop, overlayRight;
+                if (overlay) {
+                    const fabTop = winH - newBottom - elH;
+                    overlayTop = fabTop - overlayOh - 12;
+                    overlayRight = newRight;
+                }
+
+                // WRITE styles at the very end
+                el.style.right = newRight + 'px';
+                el.style.bottom = newBottom + 'px';
+                el.style.left = '';
+                el.style.top = '';
+
+                if (overlay) {
+                    overlay.style.top = (overlayTop > 0 ? overlayTop : 8) + 'px';
+                    overlay.style.right = Math.max(8, overlayRight) + 'px';
+                    overlay.style.bottom = '';
+                    overlay.style.left = '';
+                }
+            });
         }
 
         function onUp() {
@@ -370,7 +402,7 @@
                 break;
 
             case 'result': {
-                updateOverlayText('', data.interim || (insertBuffer ? '⏳ ' + insertBuffer : '🎤 Speak now...'));
+                updateOverlayText('', data.interim || (insertBuffer ? insertBuffer : '🎤 Speak now...'));
                 setSpeaking(!!data.interim);
 
                 if (data.final && data.final.trim()) {
@@ -378,12 +410,13 @@
                     if (insertDelay > 0) {
                         // Buffer mode: accumulate and debounce
                         insertBuffer += (insertBuffer ? ' ' : '') + textToInsert;
-                        updateOverlayText('', '⏳ ' + insertBuffer);
+                        updateOverlayText('', insertBuffer);
                         clearTimeout(insertTimer);
                         insertTimer = setTimeout(() => {
                             const target = targetInput || resolveTargetInput();
                             if (target && insertBuffer) insertText(target, insertBuffer);
                             insertBuffer = '';
+                            updateOverlayText('', '🎤 Speak now...');
                             insertTimer = null;
                         }, insertDelay);
                     } else {
@@ -469,6 +502,7 @@
                     const target = targetInput || resolveTargetInput();
                     if (target) insertText(target, insertBuffer);
                     insertBuffer = '';
+                    updateOverlayText('', '🎤 Speak now...');
                     insertTimer = null;
                 }
                 updateFabState();
