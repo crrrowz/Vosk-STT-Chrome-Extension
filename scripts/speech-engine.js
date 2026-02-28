@@ -289,6 +289,8 @@
         recognition.maxAlternatives = 1;
 
         let emittedLength = 0;
+        let lastInterim = '';
+        let interimTimeout = null;
         const myGeneration = stopGeneration;
 
         recognition.onstart = () => emit('started', {});
@@ -296,6 +298,8 @@
         recognition.onspeechstart = () => emit('speechstart', {});
 
         recognition.onresult = (event) => {
+            clearTimeout(interimTimeout);
+
             let allFinal = '';
             let interim = '';
 
@@ -308,13 +312,21 @@
             }
 
             const rawDelta = allFinal.substring(emittedLength).trim();
-            const cmdResult = rawDelta ? processVoiceCommands(rawDelta) : null;
+
+            // BUGFIX: Rescue dropped phonetic text or non-Arabic words (bypassing strict checks)
+            let effectiveDelta = rawDelta;
+            if (lastInterim && !interim && !rawDelta) {
+                effectiveDelta = lastInterim.trim();
+            }
+            lastInterim = interim;
+
+            const cmdResult = effectiveDelta ? processVoiceCommands(effectiveDelta) : null;
 
             if (cmdResult && cmdResult.startsWith('__CMD:')) {
                 emit('voiceCommand', { command: cmdResult.substring(6) });
             } else {
                 // Always run postProcess for Arabic numbers, even after punctuation replacement
-                const processed = rawDelta ? postProcess(cmdResult || rawDelta) : '';
+                const processed = effectiveDelta ? postProcess(cmdResult || effectiveDelta) : '';
 
                 emit('result', {
                     final: processed,
@@ -326,9 +338,19 @@
             if (rawDelta) {
                 emittedLength = allFinal.length;
             }
+
+            // Force acceptance of phonetic / foreign words if the engine hesitates too long
+            if (interim.trim() && shouldBeRunning) {
+                interimTimeout = setTimeout(() => {
+                    if (recognition && shouldBeRunning) {
+                        try { recognition.stop(); } catch (_err) { }
+                    }
+                }, 1200);
+            }
         };
 
         recognition.onerror = (event) => {
+            clearTimeout(interimTimeout);
             if (event.error === 'no-speech' || event.error === 'aborted') return;
             emit('error', { error: event.error });
             if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error)) {
@@ -337,6 +359,20 @@
         };
 
         recognition.onend = () => {
+            clearTimeout(interimTimeout);
+
+            // Rescue any lingering interim before restart logic
+            if (lastInterim.trim() && myGeneration === stopGeneration && shouldBeRunning) {
+                const effectiveDelta = lastInterim.trim();
+                const cmdResult = processVoiceCommands(effectiveDelta);
+                if (cmdResult && cmdResult.startsWith('__CMD:')) {
+                    emit('voiceCommand', { command: cmdResult.substring(6) });
+                } else {
+                    emit('result', { final: postProcess(cmdResult || effectiveDelta), interim: '', preview: '' });
+                }
+                lastInterim = '';
+            }
+
             recognition = null;
             if (myGeneration !== stopGeneration) {
                 emit('stopped', {});
