@@ -11,11 +11,6 @@
 <img src="assets/Gemini_Generated_Image_q3wwekq3wwekq3ww.png" width="800" alt="Vosk STT Extension" style="border-radius: 8px; margin-top: 20px;" />
 
 <br/><br/>
-
-**Demonstration Video**
-
-<video src="assets/Chrome_Extension_Concept_Video.mp4" width="800" controls style="border-radius: 8px; margin-top: 10px;"></video>
-
 </div>
 
 ---
