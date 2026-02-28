@@ -41,7 +41,7 @@ chrome.commands.onCommand.addListener(async (command) => {
         await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
     } catch (_err) {
         try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['scripts/content.js'] });
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['scripts/languages.js', 'scripts/content.js'] });
             await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['styles/content.css'] });
             await new Promise(r => setTimeout(r, 150));
         } catch (_err2) { return; }

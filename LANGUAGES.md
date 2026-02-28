@@ -6,69 +6,48 @@ This guide explains how to add new languages to the Vosk STT extension.
 
 The Web Speech API supports any language with a [BCP-47 language tag](https://www.ietf.org/rfc/bcp/bcp47.txt). 
 
-### Currently Included
+### Currently Active
 | Code | Language | Default |
 |------|----------|---------|
 | `ar-IQ` | Arabic (Iraq) | ✅ |
-| `ar-SA` | Arabic (Saudi Arabia) | |
 | `en-US` | English (United States) | |
 
 ## How to Add a New Language
 
-### Step 1: Add Language Chip (`popup/popup.html`)
+### ✅ One-Step Process
 
-Add a new button inside the `.lang-row` div:
-
-```html
-<div class="lang-row">
-  <button class="lang-chip active" data-lang="ar-IQ">عربي</button>
-  <button class="lang-chip" data-lang="en-US">EN</button>
-  <!-- ADD YOUR LANGUAGE HERE -->
-  <button class="lang-chip" data-lang="fr-FR">FR</button>
-</div>
-```
-
-> **Note:** If adding more than 3 languages, consider using a grid layout:
-> ```css
-> .lang-row { flex-wrap: wrap; }
-> .lang-chip { flex: 0 0 calc(50% - 4px); }
-> ```
-
-### Step 2: Update Language Labels (`scripts/content.js`)
-
-Add the label and short code to the `LANG_LABELS` and `LANG_SHORT` objects:
+Open `scripts/languages.js` and add **one line** to the `VOSK_LANGUAGES` array:
 
 ```javascript
-const LANG_LABELS = {
-    'ar-IQ': 'عربي', 'ar-SA': 'عربي', 'ar': 'عربي', 'en-US': 'EN',
-    'fr-FR': 'FR',  // ← add here
-};
-const LANG_SHORT = {
-    'ar-IQ': 'AR', 'ar-SA': 'AR', 'ar': 'AR', 'en-US': 'EN',
-    'fr-FR': 'FR',  // ← add here
-};
+const VOSK_LANGUAGES = [
+    { code: 'ar-IQ', label: 'عربي', short: 'AR', rtl: true },
+    { code: 'en-US', label: 'EN', short: 'EN', rtl: false },
+    { code: 'fr-FR', label: 'FR', short: 'FR', rtl: false },  // ← just add this
+];
 ```
 
-### Step 3: Update Language Toggle (`scripts/speech-engine.js`)
+**That's it.** The entire extension updates automatically:
+- ✅ Popup shows a new language chip
+- ✅ FAB badge displays the correct short code
+- ✅ Overlay header shows the correct label
+- ✅ `Alt+L` cycles through all registered languages
 
-The `switchLang` command currently toggles between AR ↔ EN. To support cycling through multiple languages:
+### Field Reference
 
-```javascript
-// In the 'switchLang' handler, replace:
-currentLang = currentLang.startsWith('ar') ? 'en-US' : 'ar-IQ';
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `code` | BCP-47 language code for the Web Speech API | `'fr-FR'` |
+| `label` | Text shown on the popup chip button | `'FR'` or `'Français'` |
+| `short` | 2-letter code shown on the FAB badge | `'FR'` |
+| `rtl` | `true` for right-to-left languages | `false` |
 
-// With:
-const langs = ['ar-IQ', 'en-US', 'fr-FR']; // add your lang
-const idx = langs.indexOf(currentLang);
-currentLang = langs[(idx + 1) % langs.length];
-```
-
-### Step 4: Test
+### Test
 
 1. Reload the extension (`chrome://extensions` → ↻)
 2. Reload the page
-3. Select your new language from the popup
-4. Test recognition with native speech
+3. Open popup → new language chip should appear
+4. Click it and speak → verify recognition works
+5. Press `Alt+L` → verify it cycles through all languages
 
 ## Common Language Codes
 
@@ -93,15 +72,15 @@ currentLang = langs[(idx + 1) % langs.length];
 ## RTL Considerations
 
 For RTL languages (Arabic, Hebrew, Persian):
+- Set `rtl: true` in the language entry
 - The overlay and FAB already support RTL via `direction: rtl`
 - Text insertion respects cursor position
-- No additional changes needed
 
 ## Offline Languages (Vosk)
 
-To use Vosk for offline recognition (no internet needed):
+> **Note:** Offline mode is a planned feature and not yet implemented.
+
+To use Vosk for offline recognition in the future:
 1. Download a model from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)
 2. The extension would need `vosk-browser` WASM integration
-3. See the issue tracker for offline mode progress
-
-> **Note:** Offline mode is a planned feature and not yet implemented in this extension.
+3. See the roadmap in `audit/03-future-roadmap.md` for progress

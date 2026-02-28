@@ -1,12 +1,36 @@
 (() => {
     const toggleBtn = document.getElementById('toggleBtn');
     const pickBtn = document.getElementById('pickBtn');
-    const langChips = document.querySelectorAll('.lang-chip');
+    const langRow = document.getElementById('langRow');
     const splitToggle = document.getElementById('splitToggle');
     const autoShowToggle = document.getElementById('autoShowToggle');
-    let selectedLang = 'ar-IQ';
+    const cfg = window.VOSK_LANG_CONFIG;
+    let selectedLang = cfg?.defaultLang || 'ar-IQ';
 
     const RESTRICTED_RE = /^(chrome|edge|about|chrome-extension|devtools|file):\/\//;
+
+    // Dynamically generate language chips from shared registry
+    function buildLangChips() {
+        if (!langRow || !cfg) return;
+        langRow.textContent = '';
+        cfg.languages.forEach(lang => {
+            const btn = document.createElement('button');
+            btn.className = 'lang-chip' + (lang.code === selectedLang ? ' active' : '');
+            btn.dataset.lang = lang.code;
+            btn.textContent = lang.label;
+            btn.addEventListener('click', async () => {
+                langRow.querySelectorAll('.lang-chip').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                selectedLang = lang.code;
+                chrome.storage?.local?.set({ sttLang: selectedLang });
+                try {
+                    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                    if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setLang', lang: selectedLang });
+                } catch (_err) { console.warn('[Vosk STT] setLang failed', _err); }
+            });
+            langRow.appendChild(btn);
+        });
+    }
 
     function showError(msg) {
         let el = document.getElementById('vosk-popup-error');
@@ -20,16 +44,35 @@
         setTimeout(() => el.remove(), 4000);
     }
 
-    // Load saved settings
-    chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow'], (r) => {
-        if (chrome.runtime.lastError) return;
-        selectedLang = r?.sttLang || 'ar-IQ';
-        langChips.forEach(c => {
-            c.classList.toggle('active', c.dataset.lang === selectedLang);
+    // ─── Insert Delay Slider ───
+    const insertDelaySlider = document.getElementById('insertDelay');
+    const delayValueLabel = document.getElementById('delayValue');
+
+    function updateDelayLabel(val) {
+        if (!delayValueLabel) return;
+        delayValueLabel.textContent = val >= 1000 ? (val / 1000).toFixed(1) + 's' : val + 'ms';
+    }
+
+    if (insertDelaySlider) {
+        insertDelaySlider.addEventListener('input', () => updateDelayLabel(+insertDelaySlider.value));
+        insertDelaySlider.addEventListener('change', () => {
+            chrome.storage?.local?.set({ insertDelay: +insertDelaySlider.value });
         });
+    }
+
+    // Load saved settings
+    chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay'], (r) => {
+        if (chrome.runtime.lastError) return;
+        selectedLang = r?.sttLang || cfg?.defaultLang || 'ar-IQ';
+        buildLangChips();
         if (splitToggle) splitToggle.checked = !!r?.splitFab;
-        // ROAD-01: Load auto-show preference (default true)
+        if (langRow) langRow.classList.toggle('hidden', !!r?.splitFab);
         if (autoShowToggle) autoShowToggle.checked = r?.fabAutoShow !== false;
+        initSplitPicker(r?.splitLangs, !!r?.splitFab);
+        if (insertDelaySlider && r?.insertDelay != null) {
+            insertDelaySlider.value = r.insertDelay;
+            updateDelayLabel(r.insertDelay);
+        }
     });
 
     // ISSUE-19: Check FAB state and sync button text
@@ -41,30 +84,63 @@
                 if (chrome.runtime.lastError) return;
                 toggleBtn.textContent = response?.hasFab ? '🎤 Hide Mic Button' : '🎤 Show Mic Button';
             });
-        } catch (_err) {
-            // Keep default text
-        }
+        } catch (_err) { /* Keep default text */ }
     });
 
-    // Language chip toggle
-    langChips.forEach(chip => {
-        chip.addEventListener('click', async () => {
-            langChips.forEach(c => c.classList.remove('active'));
-            chip.classList.add('active');
-            selectedLang = chip.dataset.lang;
-            chrome.storage?.local?.set({ sttLang: selectedLang });
-            try {
-                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-                if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setLang', lang: selectedLang });
-            } catch (_err) { console.warn('[Vosk STT] setLang failed', _err); }
+    // ─── Split Language Picker ───
+    const splitPicker = document.getElementById('splitPicker');
+    const splitLang1 = document.getElementById('splitLang1');
+    const splitLang2 = document.getElementById('splitLang2');
+    const splitSwap = document.getElementById('splitSwap');
+
+    function initSplitPicker(savedLangs, isEnabled) {
+        if (!cfg || !splitLang1 || !splitLang2) return;
+        const langs = cfg.languages;
+        const defaults = savedLangs || [langs[0]?.code, langs[1]?.code || langs[0]?.code];
+
+        [splitLang1, splitLang2].forEach(sel => {
+            sel.textContent = '';
+            langs.forEach(l => {
+                const opt = document.createElement('option');
+                opt.value = l.code;
+                opt.textContent = `${l.short}`;
+                sel.appendChild(opt);
+            });
         });
-    });
+
+        splitLang1.value = defaults[0];
+        splitLang2.value = defaults[1];
+
+        if (isEnabled && splitPicker) splitPicker.classList.add('visible');
+    }
+
+    function saveSplitLangs() {
+        const pair = [splitLang1.value, splitLang2.value];
+        chrome.storage?.local?.set({ splitLangs: pair });
+        // Notify content script
+        chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+            if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setSplitLangs', splitLangs: pair });
+        });
+    }
+
+    if (splitLang1) splitLang1.addEventListener('change', saveSplitLangs);
+    if (splitLang2) splitLang2.addEventListener('change', saveSplitLangs);
+    if (splitSwap) {
+        splitSwap.addEventListener('click', () => {
+            const tmp = splitLang1.value;
+            splitLang1.value = splitLang2.value;
+            splitLang2.value = tmp;
+            saveSplitLangs();
+        });
+    }
 
     // Split FAB toggle
     if (splitToggle) {
         splitToggle.addEventListener('change', async () => {
             const enabled = splitToggle.checked;
             chrome.storage?.local?.set({ splitFab: enabled });
+            if (splitPicker) splitPicker.classList.toggle('visible', enabled);
+            if (langRow) langRow.classList.toggle('hidden', enabled);
             try {
                 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                 if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setSplit', split: enabled });
@@ -75,7 +151,12 @@
     // ROAD-01: Auto-show FAB toggle
     if (autoShowToggle) {
         autoShowToggle.addEventListener('change', () => {
-            chrome.storage?.local?.set({ fabAutoShow: autoShowToggle.checked });
+            const isAuto = autoShowToggle.checked;
+            chrome.storage?.local?.set({ fabAutoShow: isAuto });
+            // Sync the manual toggle button text since the FAB will be auto-created/removed
+            if (toggleBtn) {
+                toggleBtn.textContent = isAuto ? '🎤 Hide Mic Button' : '🎤 Show Mic Button';
+            }
         });
     }
 
@@ -86,7 +167,7 @@
         try {
             await chrome.tabs.sendMessage(tabId, { action: 'ping' });
         } catch (_err) {
-            await chrome.scripting.executeScript({ target: { tabId }, files: ['scripts/content.js'] });
+            await chrome.scripting.executeScript({ target: { tabId }, files: ['scripts/languages.js', 'scripts/content.js'] });
             await chrome.scripting.insertCSS({ target: { tabId }, files: ['styles/content.css'] });
             await new Promise(r => setTimeout(r, 150));
         }

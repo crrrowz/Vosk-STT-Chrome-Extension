@@ -200,15 +200,40 @@
         'delete': '__CMD:delete', 'delete that': '__CMD:delete',
     };
 
-    const CMD_KEYS = Object.keys(VOICE_COMMANDS).sort((a, b) => b.length - a.length);
+    // Separate CMD commands (exact-match only) from punctuation (inline replace)
+    const CMD_ACTIONS = {};
+    const PUNCTUATION = {};
+    for (const [key, val] of Object.entries(VOICE_COMMANDS)) {
+        if (typeof val === 'string' && val.startsWith('__CMD:')) {
+            CMD_ACTIONS[key] = val;
+        } else {
+            PUNCTUATION[key] = val;
+        }
+    }
+    const CMD_KEYS = Object.keys(CMD_ACTIONS).sort((a, b) => b.length - a.length);
+    const PUNCT_KEYS = Object.keys(PUNCTUATION).sort((a, b) => b.length - a.length);
+    const PUNCT_REGEX = new RegExp(
+        '\\s*(' + PUNCT_KEYS.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\s*',
+        'gi'
+    );
 
     function processVoiceCommands(text) {
         if (!text) return text;
-        const lower = text.trim().toLowerCase();
+        const trimmed = text.trim();
+        const lower = trimmed.toLowerCase();
+
+        // 1. Exact match for __CMD commands (clear, undo, delete)
         for (const cmd of CMD_KEYS) {
-            if (lower === cmd) return VOICE_COMMANDS[cmd];
+            if (lower === cmd) return CMD_ACTIONS[cmd];
         }
-        return text;
+
+        // 2. Inline replace punctuation commands within text
+        const replaced = trimmed.replace(PUNCT_REGEX, (match) => {
+            const key = match.trim().toLowerCase();
+            return PUNCTUATION[key] || match;
+        });
+
+        return replaced;
     }
 
     /* ───── Command Handler ───── */
@@ -227,7 +252,9 @@
             stopRecognition();
 
         } else if (command === 'switchLang') {
-            currentLang = currentLang.startsWith('ar') ? 'en-US' : 'ar-IQ';
+            const langCfg = window.VOSK_LANG_CONFIG;
+            currentLang = langCfg ? langCfg.getNextLang(currentLang)
+                : (currentLang.startsWith('ar') ? 'en-US' : 'ar-IQ');
             emit('langChanged', { lang: currentLang });
             if (shouldBeRunning) {
                 restartCount = 0;
@@ -286,9 +313,8 @@
             if (cmdResult && cmdResult.startsWith('__CMD:')) {
                 emit('voiceCommand', { command: cmdResult.substring(6) });
             } else {
-                const processed = cmdResult && cmdResult !== rawDelta
-                    ? cmdResult
-                    : (rawDelta ? postProcess(rawDelta) : '');
+                // Always run postProcess for Arabic numbers, even after punctuation replacement
+                const processed = rawDelta ? postProcess(cmdResult || rawDelta) : '';
 
                 emit('result', {
                     final: processed,

@@ -18,39 +18,60 @@
       </div>
     </div>
 
-    <div class="lang-row">
-      <button class="lang-chip active" data-lang="ar-IQ">عربي</button>
-      <button class="lang-chip" data-lang="en-US">EN</button>
+    <!-- Language selection (hidden when Quick Switch is on) -->
+    <div class="lang-row" id="langRow"></div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button id="toggleBtn" class="main-btn">🎤 Show Mic Button</button>
+      <button id="pickBtn" class="pick-btn">🎯 Pick Input Field</button>
     </div>
 
-    <div class="toggle-row">
-      <label class="toggle-label" for="splitToggle">⚡ Quick Switch</label>
-      <label class="switch">
-        <input type="checkbox" id="splitToggle">
-        <span class="slider"></span>
-      </label>
+    <!-- Settings group -->
+    <div class="settings-group">
+      <div class="toggle-row">
+        <label class="toggle-label" for="splitToggle">⚡ Quick Switch</label>
+        <label class="switch">
+          <input type="checkbox" id="splitToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Split language pair picker -->
+      <div class="split-picker" id="splitPicker">
+        <div class="split-picker-row">
+          <select id="splitLang1" class="split-select"></select>
+          <span class="split-swap" id="splitSwap" title="Swap">⇄</span>
+          <select id="splitLang2" class="split-select"></select>
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <label class="toggle-label" for="autoShowToggle">🎤 Auto-show Mic</label>
+        <label class="switch">
+          <input type="checkbox" id="autoShowToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="delay-row">
+        <div class="delay-header">
+          <label class="delay-label">⏱️ Insert Delay</label>
+          <span id="delayValue" class="delay-value">0s</span>
+        </div>
+        <input type="range" id="insertDelay" min="0" max="5000" step="250" value="0" class="delay-slider">
+      </div>
     </div>
 
-    <!-- ROAD-01: Auto-show FAB toggle -->
-    <div class="toggle-row">
-      <label class="toggle-label" for="autoShowToggle">🎤 Auto-show Mic</label>
-      <label class="switch">
-        <input type="checkbox" id="autoShowToggle" checked>
-        <span class="slider"></span>
-      </label>
-    </div>
-
-    <!-- ISSUE-19: Default to "Hide Mic Button" since FAB auto-shows -->
-    <button id="toggleBtn" class="main-btn">🎤 Hide Mic Button</button>
-    <button id="pickBtn" class="pick-btn">🎯 Pick Input Field</button>
-
+    <!-- Shortcuts -->
     <div class="shortcuts">
-      <div class="shortcut-row"><kbd>Alt + S</kbd><span>Record</span></div>
-      <div class="shortcut-row"><kbd>Alt + L</kbd><span>Switch Lang</span></div>
-      <div class="shortcut-row"><kbd>Alt + P</kbd><span>Pick Input</span></div>
+      <div class="shortcut-row"><kbd>Alt+S</kbd><span>Record</span></div>
+      <div class="shortcut-row"><kbd>Alt+L</kbd><span>Lang</span></div>
+      <div class="shortcut-row"><kbd>Alt+P</kbd><span>Pick</span></div>
     </div>
   </div>
 
+  <script src="../scripts/languages.js"></script>
   <script src="popup.js"></script>
 </body>
 

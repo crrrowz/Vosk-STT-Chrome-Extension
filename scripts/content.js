@@ -11,17 +11,19 @@
     let fab = null;
     let currentLang = 'ar-IQ';
     let splitFab = false;
+    let splitLangs = null; // [lang1, lang2] for split FAB halves
     let pendingLangStart = null;
     let positionRafId = null; // ISSUE-17: rAF debounce for positionOverlay
     let cachedInput = null;   // ISSUE-15: cached resolveTargetInput
     let cachedInputTime = 0;  // ISSUE-15: cache timestamp
+    let insertDelay = 0;      // ms to buffer final text before inserting
+    let insertBuffer = '';    // accumulated text during delay
+    let insertTimer = null;   // debounce timer for delayed insert
 
-    const LANG_LABELS = {
-        'ar-IQ': 'عربي', 'ar-SA': 'عربي', 'ar': 'عربي', 'en-US': 'EN'
-    };
-    const LANG_SHORT = {
-        'ar-IQ': 'AR', 'ar-SA': 'AR', 'ar': 'AR', 'en-US': 'EN'
-    };
+    const cfg = window.VOSK_LANG_CONFIG;
+
+    function getLangLabel(code) { return cfg?.getLangLabel(code) || code; }
+    function getLangShort(code) { return cfg?.getLangShort(code) || code.split('-')[0].toUpperCase(); }
 
     /* ───── Utility: Extension Context Guard (ISSUE-04) ───── */
 
@@ -57,12 +59,20 @@
     function injectSpeechEngine() {
         if (engineInjected) return;
         engineInjected = true;
+        // Inject shared language registry into main world first
+        const oldLang = document.getElementById('vosk-stt-languages');
+        if (oldLang) oldLang.remove();
+        const langScript = document.createElement('script');
+        langScript.id = 'vosk-stt-languages';
+        langScript.src = chrome.runtime.getURL('scripts/languages.js');
+        (document.head || document.documentElement).appendChild(langScript);
+        // Then inject speech engine
         const old = document.getElementById('vosk-stt-engine');
         if (old) old.remove();
         const script = document.createElement('script');
         script.id = 'vosk-stt-engine';
         script.src = chrome.runtime.getURL('scripts/speech-engine.js');
-        (document.head || document.documentElement).appendChild(script);
+        langScript.onload = () => (document.head || document.documentElement).appendChild(script);
     }
 
     injectSpeechEngine();
@@ -135,22 +145,21 @@
 
             const langBadge = document.createElement('div');
             langBadge.id = 'vosk-fab-lang';
-            langBadge.textContent = LANG_SHORT[currentLang] || 'AR';
+            langBadge.textContent = getLangShort(currentLang);
             fab.appendChild(langBadge);
 
-            const halfEn = document.createElement('div');
-            halfEn.className = 'vosk-fab-half' + (currentLang === 'en-US' ? ' active-lang' : '');
-            halfEn.dataset.lang = 'en-US';
-            halfEn.textContent = 'EN';
-            halfEn.addEventListener('click', onHalfClick);
-            fab.appendChild(halfEn);
-
-            const halfAr = document.createElement('div');
-            halfAr.className = 'vosk-fab-half' + (currentLang.startsWith('ar') ? ' active-lang' : '');
-            halfAr.dataset.lang = 'ar-IQ';
-            halfAr.textContent = 'AR';
-            halfAr.addEventListener('click', onHalfClick);
-            fab.appendChild(halfAr);
+            // Dynamic split halves from splitLangs
+            const pair = splitLangs || (cfg?.languages?.length >= 2
+                ? [cfg.languages[0].code, cfg.languages[1].code]
+                : ['ar-IQ', 'en-US']);
+            pair.forEach(code => {
+                const half = document.createElement('div');
+                half.className = 'vosk-fab-half' + (currentLang === code ? ' active-lang' : '');
+                half.dataset.lang = code;
+                half.textContent = getLangShort(code);
+                half.addEventListener('click', onHalfClick);
+                fab.appendChild(half);
+            });
         } else {
             fab.classList.remove('split');
 
@@ -158,7 +167,7 @@
 
             const langBadge = document.createElement('div');
             langBadge.id = 'vosk-fab-lang';
-            langBadge.textContent = LANG_SHORT[currentLang] || 'AR';
+            langBadge.textContent = getLangShort(currentLang);
             fab.appendChild(langBadge);
         }
     }
@@ -169,8 +178,7 @@
         const half = e.target.closest('.vosk-fab-half');
         if (!half) return;
         const lang = half.dataset.lang;
-        const isSameLang = (lang === currentLang) ||
-            (lang === 'ar-IQ' && currentLang.startsWith('ar'));
+        const isSameLang = (lang === currentLang);
 
         if (isRecording && isSameLang) {
             stopRecognition();
@@ -200,8 +208,7 @@
     function updateSplitActive() {
         if (!fab) return;
         fab.querySelectorAll('.vosk-fab-half').forEach(h => {
-            h.classList.toggle('active-lang', h.dataset.lang === currentLang ||
-                (h.dataset.lang === 'ar-IQ' && currentLang.startsWith('ar')));
+            h.classList.toggle('active-lang', h.dataset.lang === currentLang);
         });
     }
 
@@ -224,7 +231,7 @@
     function updateFabLang() {
         if (!fab) return;
         const badge = fab.querySelector('#vosk-fab-lang');
-        if (badge) badge.textContent = LANG_SHORT[currentLang] || 'AR';
+        if (badge) badge.textContent = getLangShort(currentLang);
     }
 
     /* ───── Drag Logic ───── */
@@ -363,14 +370,26 @@
                 break;
 
             case 'result': {
-                updateOverlayText('', data.interim || '🎤 Speak now...');
+                updateOverlayText('', data.interim || (insertBuffer ? '⏳ ' + insertBuffer : '🎤 Speak now...'));
                 setSpeaking(!!data.interim);
 
                 if (data.final && data.final.trim()) {
-                    const textToInsert = sanitizeText(data.final.trim()); // ISSUE-03
-                    const target = targetInput || resolveTargetInput();
-                    if (target) {
-                        insertText(target, textToInsert);
+                    const textToInsert = sanitizeText(data.final.trim());
+                    if (insertDelay > 0) {
+                        // Buffer mode: accumulate and debounce
+                        insertBuffer += (insertBuffer ? ' ' : '') + textToInsert;
+                        updateOverlayText('', '⏳ ' + insertBuffer);
+                        clearTimeout(insertTimer);
+                        insertTimer = setTimeout(() => {
+                            const target = targetInput || resolveTargetInput();
+                            if (target && insertBuffer) insertText(target, insertBuffer);
+                            insertBuffer = '';
+                            insertTimer = null;
+                        }, insertDelay);
+                    } else {
+                        // Instant mode
+                        const target = targetInput || resolveTargetInput();
+                        if (target) insertText(target, textToInsert);
                     }
                 }
                 break;
@@ -383,7 +402,7 @@
             case 'langChanged':
                 currentLang = data.lang;
                 updateFabLang();
-                const lbl = LANG_LABELS[data.lang] || data.lang;
+                const lbl = getLangLabel(data.lang);
                 updateOverlayLabel(lbl);
                 break;
 
@@ -444,6 +463,14 @@
             case 'stopped':
                 if (!isRecording && !pendingLangStart) break;
                 isRecording = false;
+                // Flush any buffered text before closing overlay
+                if (insertBuffer) {
+                    clearTimeout(insertTimer);
+                    const target = targetInput || resolveTargetInput();
+                    if (target) insertText(target, insertBuffer);
+                    insertBuffer = '';
+                    insertTimer = null;
+                }
                 updateFabState();
                 hideOverlay();
                 try { chrome.runtime.sendMessage({ action: 'stopped' }); } catch (_err) { /* tab may be closing */ }
@@ -795,7 +822,20 @@
 
         if (msg.action === 'setSplit') {
             splitFab = !!msg.split;
-            if (fab) renderFabContent();
+            if (fab) {
+                // Re-read splitLangs for fresh halves
+                chrome.storage?.local?.get(['splitLangs'], (r) => {
+                    if (r?.splitLangs) splitLangs = r.splitLangs;
+                    renderFabContent();
+                });
+            }
+            sendResponse({ ok: true });
+            return true;
+        }
+
+        if (msg.action === 'setSplitLangs') {
+            splitLangs = msg.splitLangs;
+            if (fab && splitFab) renderFabContent();
             sendResponse({ ok: true });
             return true;
         }
@@ -889,27 +929,31 @@
 
     // ISSUE-18 + ROAD-01: Auto-show FAB based on user preference
     if (isExtensionAlive()) {
-        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow'], (r) => {
+        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay'], (r) => {
             if (chrome.runtime.lastError) return;
-            // Default to true if preference not set
             if (r?.fabAutoShow === false) return;
             currentLang = r?.sttLang || 'ar-IQ';
             splitFab = !!r?.splitFab;
+            if (r?.splitLangs) splitLangs = r.splitLangs;
+            if (r?.insertDelay != null) insertDelay = r.insertDelay;
             createFab();
             updateFabLang();
         });
 
         // Live-react to fabAutoShow toggle
         chrome.storage.onChanged.addListener((changes, area) => {
-            if (area !== 'local' || !changes.fabAutoShow) return;
+            if (area !== 'local') return;
+            if (changes.insertDelay) insertDelay = changes.insertDelay.newValue || 0;
+            if (!changes.fabAutoShow) return;
             if (changes.fabAutoShow.newValue === false) {
                 if (isRecording) stopRecognition();
                 removeFab();
             } else if (changes.fabAutoShow.newValue === true && !fab) {
-                chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
+                chrome.storage?.local?.get(['sttLang', 'splitFab', 'splitLangs'], (r) => {
                     if (chrome.runtime.lastError) return;
                     currentLang = r?.sttLang || 'ar-IQ';
                     splitFab = !!r?.splitFab;
+                    if (r?.splitLangs) splitLangs = r.splitLangs;
                     createFab();
                     updateFabLang();
                 });

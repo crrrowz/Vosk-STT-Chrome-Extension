@@ -51,6 +51,7 @@
                 "https://*/*"
             ],
             "js": [
+                "scripts/languages.js",
                 "scripts/content.js"
             ],
             "css": [
@@ -62,6 +63,7 @@
     "web_accessible_resources": [
         {
             "resources": [
+                "scripts/languages.js",
                 "scripts/speech-engine.js"
             ],
             "matches": [

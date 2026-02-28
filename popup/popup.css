@@ -16,10 +16,10 @@ body {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
-/* Header */
+/* ─── Header ─── */
 .header {
   display: flex;
   align-items: center;
@@ -46,10 +46,16 @@ body {
   margin-top: 1px;
 }
 
-/* Language Chips */
+/* ─── Language Chips ─── */
 .lang-row {
   display: flex;
   gap: 6px;
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.lang-row.hidden {
+  display: none;
 }
 
 .lang-chip {
@@ -77,7 +83,13 @@ body {
   font-weight: 600;
 }
 
-/* Main Button */
+/* ─── Actions ─── */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .main-btn {
   width: 100%;
   padding: 11px;
@@ -98,7 +110,6 @@ body {
   box-shadow: 0 6px 18px rgba(108, 60, 225, 0.4);
 }
 
-/* Pick Button */
 .pick-btn {
   width: 100%;
   padding: 8px;
@@ -118,44 +129,22 @@ body {
   color: #c0c0d8;
 }
 
-/* Shortcuts */
-.shortcuts {
+/* ─── Settings Group ─── */
+.settings-group {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  gap: 2px;
 }
 
-.shortcut-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0;
-}
-
-.shortcut-row kbd {
-  font-family: 'Consolas', 'Courier New', monospace;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: #161625;
-  border: 1px solid rgba(108, 60, 225, 0.15);
-  color: #7a7aa0;
-  letter-spacing: 0.02em;
-}
-
-.shortcut-row span {
-  font-size: 11px;
-  color: #5a5a78;
-}
-
-/* Toggle Row */
 .toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0;
+  padding: 5px 0;
 }
 
 .toggle-label {
@@ -203,4 +192,159 @@ body {
 .switch input:checked+.slider::before {
   transform: translateX(16px);
   background: #6C3CE1;
+}
+
+/* ─── Insert Delay ─── */
+.delay-row {
+  padding: 4px 0 2px;
+}
+
+.delay-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.delay-label {
+  font-size: 12px;
+  color: #9898b0;
+}
+
+.delay-value {
+  font-size: 11px;
+  color: #6C3CE1;
+  font-weight: 600;
+  font-family: 'Consolas', monospace;
+}
+
+.delay-slider {
+  width: 100%;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #2a2a40;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.delay-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6C3CE1;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(108, 60, 225, 0.4);
+  transition: transform 0.15s;
+}
+
+.delay-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* ─── Split Picker ─── */
+.split-picker {
+  display: none;
+  padding: 2px 0 4px;
+  animation: slideIn 0.2s ease;
+}
+
+.split-picker.visible {
+  display: block;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.split-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.split-select {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(108, 60, 225, 0.25);
+  background: #161625;
+  color: #e4e4f0;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236a6a8a'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 20px;
+  transition: border-color 0.2s;
+}
+
+.split-select:focus {
+  border-color: #6C3CE1;
+}
+
+.split-select option {
+  background: #161625;
+  color: #e4e4f0;
+}
+
+.split-swap {
+  font-size: 14px;
+  color: #6C3CE1;
+  cursor: pointer;
+  user-select: none;
+  padding: 3px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.split-swap:hover {
+  background: rgba(108, 60, 225, 0.15);
+  transform: scale(1.15);
+}
+
+/* ─── Shortcuts ─── */
+.shortcuts {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.shortcut-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.shortcut-row kbd {
+  font-family: 'Consolas', monospace;
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #161625;
+  border: 1px solid rgba(108, 60, 225, 0.15);
+  color: #7a7aa0;
+}
+
+.shortcut-row span {
+  font-size: 9px;
+  color: #5a5a78;
 }
