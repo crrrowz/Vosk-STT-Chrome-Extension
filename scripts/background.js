@@ -4,25 +4,33 @@
 // Track which tab is currently recording
 let activeRecordingTabId = null;
 
-// Listen for "stopped" messages from content scripts
+// Stop recording in a specific tab, returns a Promise
+function stopTabRecording(tabId) {
+    return new Promise((resolve) => {
+        chrome.tabs.sendMessage(tabId, { action: 'stop' }, () => {
+            if (chrome.runtime.lastError) { /* tab may be closed */ }
+            resolve();
+        });
+    });
+}
+
+// ISSUE-13: Single consolidated onMessage listener
 chrome.runtime.onMessage.addListener((msg, sender) => {
     if (msg.action === 'stopped' && sender.tab) {
         if (activeRecordingTabId === sender.tab.id) {
             activeRecordingTabId = null;
         }
     }
+    if (msg.action === 'startRecordingFromTab' && sender.tab?.id) {
+        const tabId = sender.tab.id;
+        (async () => {
+            if (activeRecordingTabId && activeRecordingTabId !== tabId) {
+                await stopTabRecording(activeRecordingTabId);
+            }
+            activeRecordingTabId = tabId;
+        })();
+    }
 });
-
-// Stop recording in a specific tab, returns a Promise
-function stopTabRecording(tabId) {
-    return new Promise((resolve) => {
-        chrome.tabs.sendMessage(tabId, { action: 'stop' }, () => {
-            // Ignore errors (tab might be closed)
-            if (chrome.runtime.lastError) { /* noop */ }
-            resolve();
-        });
-    });
-}
 
 chrome.commands.onCommand.addListener(async (command) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -31,17 +39,16 @@ chrome.commands.onCommand.addListener(async (command) => {
     // Ensure content script is injected
     try {
         await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
-    } catch (e) {
+    } catch (_err) {
         try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-            await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['scripts/content.js'] });
+            await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['styles/content.css'] });
             await new Promise(r => setTimeout(r, 150));
-        } catch (err) { return; }
+        } catch (_err2) { return; }
     }
 
     switch (command) {
         case 'toggle-recording':
-            // If another tab is recording, stop it first
             if (activeRecordingTabId && activeRecordingTabId !== tab.id) {
                 await stopTabRecording(activeRecordingTabId);
                 activeRecordingTabId = null;
@@ -55,19 +62,6 @@ chrome.commands.onCommand.addListener(async (command) => {
         case 'pick-input':
             chrome.tabs.sendMessage(tab.id, { action: 'pickInput' });
             break;
-    }
-});
-
-// Also handle when recording is started from content script
-chrome.runtime.onMessage.addListener((msg, sender) => {
-    if (msg.action === 'startRecordingFromTab' && sender.tab?.id) {
-        const tabId = sender.tab.id;
-        (async () => {
-            if (activeRecordingTabId && activeRecordingTabId !== tabId) {
-                await stopTabRecording(activeRecordingTabId);
-            }
-            activeRecordingTabId = tabId;
-        })();
     }
 });
 

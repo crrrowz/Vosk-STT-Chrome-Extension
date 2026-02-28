@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-6C3CE1.svg)](LICENSE)
 [![Chrome](https://img.shields.io/badge/Chrome-Extension-4F8FFF.svg)]()
 [![Manifest](https://img.shields.io/badge/Manifest-V3-green.svg)]()
+[![Website](https://img.shields.io/badge/Website-InnovaCode-blue.svg)](https://innovacode.org/en/projects/vosk-stt-chrome-extension)
 
 <img src="assets/Gemini_Generated_Image_q3wwekq3wwekq3ww.png" width="800" alt="Vosk STT Extension" style="border-radius: 8px; margin-top: 20px;" />
 
@@ -20,15 +21,14 @@
 | Feature | Description |
 |---------|-------------|
 | 🎤 **Floating Mic Button** | Draggable FAB on any page — click to start/stop. Persists dragged position. |
-| ⚡ **Split Quick Switch** | Optional Split FAB to instantly swap between Arabic & English live |
+| ⚡ **Split Quick Switch** | Optional split FAB to instantly swap between Arabic & English live |
 | 📝 **Live Transcription** | See text appear in real-time as you speak |
 | 🗣️ **Voice Commands** | Say "new line", "period", "comma", "نقطة", "سطر جديد" to format text |
 | ↩️ **Editing Commands** | Say "delete", "undo" or "امسح" to remove last word; "clear" to empty field |
 | 🌐 **Arabic + English** | Iraqi Arabic, Standard Arabic, English, and Mixed mode |
 | 🔢 **Smart Numbers** | Speaks "ألف تسعمئة واثنين وثمانين" → writes `1982` |
 | 🎯 **Input Picker** | Click to select exactly which field receives text |
-| ⌨️ **Keyboard Shortcuts** | Global `Alt+S`, `Alt+L`, `Alt+P` for instant access anywhere via Chrome Commands |
-| 🚀 **Zero Config** | No API keys, no models, no signup |
+| ⌨️ **Keyboard Shortcuts** | Global `Alt+S`, `Alt+L`, `Alt+P` via Chrome Commands |
 | 🔒 **Privacy First** | Uses Chrome's built-in Web Speech API — audio never leaves your browser |
 
 ## 📦 Installation
@@ -36,31 +36,32 @@
 ### From Source (Developer Mode)
 
 ```bash
-git clone https://github.com/crrrowz/vosk-stt-extension.git
+git clone https://github.com/crrrowz/Vosk-STT-Chrome-Extension.git
 ```
 
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (top-right)
-3. Click **Load unpacked** → select the `chrome-extension/` folder
+3. Click **Load unpacked** → select the project root folder
 4. 🎙️ icon appears in the toolbar
 
 ## 🚀 Usage
 
 ### Quick Start
 
-1. Click the extension icon → **"🎤 Show Mic Button"**
-2. A floating mic button appears on the page
-3. Click any input field, then click the mic
-4. Speak — text appears live, then gets inserted
-5. Click the mic again to stop
+1. The mic button auto-appears on every page (configurable)
+2. Click any input field, then click the mic
+3. Speak — text appears live, then gets inserted
+4. Click the mic again to stop
 
-### Language Modes
+### Settings (Popup)
 
-| Mode | Description |
-|------|-------------|
-| **عربي** | Iraqi Arabic (`ar-IQ`) — great for Iraqi dialect |
-| **EN** | English (`en-US`) |
-| **عربي+EN** | Mixed mode — uses generic Arabic which can pick up English words embedded in Arabic speech |
+| Setting | Description |
+|---------|-------------|
+| **Language Chips** | Switch between عربي / EN |
+| **⚡ Quick Switch** | Enable split FAB for instant language toggle |
+| **🎤 Auto-show Mic** | Toggle whether FAB auto-appears on page load |
+| **🎤 Show/Hide Mic** | Manually show or hide the FAB |
+| **🎯 Pick Input Field** | Select exactly which field receives text |
 
 ### Keyboard Shortcuts
 
@@ -81,14 +82,11 @@ The engine includes a **compositional Arabic number parser** that converts spoke
 | مئة وخمسة وأربعين | `145` |
 | ألف تسعمئة واثنين وثمانين | `1982` |
 | خمسة فاصلة ثلاثة | `5.3` |
-| اثنين بالعشرة | `0.2` |
 | خمسين بالمئة | `50%` |
 
 Supports Iraqi dialect variants (ثلطعشر، ستاشر، ثلثين, etc.)
 
 ### 🗣️ Voice Commands & Formatting
-
-You can format text and edit content using your voice in both Arabic and English:
 
 | English Command | Arabic Command | Output |
 |-----------------|----------------|--------|
@@ -99,24 +97,26 @@ You can format text and edit content using your voice in both Arabic and English
 | `undo` / `delete` | `تراجع` / `امسح` | Deletes the last word |
 | `clear all` | `مسح الكل` | Empties the input field |
 
-*See `speech-engine.js` for the full list of 35 supported commands.*
+*See `scripts/speech-engine.js` for the full list of 35+ supported commands.*
 
 ## 🏗️ Architecture
 
 ```
-chrome-extension/
-├── manifest.json          # Extension config (Manifest V3)
-├── background.js          # Service Worker (Global Shortcuts via chrome.commands)
-├── popup.html/css/js      # Popup UI (language selection, split toggle, shortcuts)
-├── content.js             # Content script (FAB, overlay, picker, DOM manipulation)
-├── content.css            # Overlay & FAB styling
-├── speech-engine.js       # Speech recognition & Voice Commands (page main world)
-├── icons/                 # Extension icons (16, 32, 48, 128)
-├── README.md              # This file
-├── LICENSE                # MIT License
-├── CONTRIBUTING.md        # Contribution guide
-├── LANGUAGES.md           # Adding language support
-└── CHANGELOG.md           # Version history
+Vosk-STT-Chrome-Extension/
+├── manifest.json              # Extension config (Manifest V3)
+├── popup/
+│   ├── popup.html             # Popup UI
+│   ├── popup.css              # Popup styling
+│   └── popup.js               # Popup logic (settings, toggles)
+├── scripts/
+│   ├── background.js          # Service Worker (chrome.commands routing)
+│   ├── content.js             # Content script (FAB, overlay, picker, DOM)
+│   └── speech-engine.js       # Speech recognition & voice commands (main world)
+├── styles/
+│   └── content.css            # FAB & overlay styling
+├── icons/                     # Extension icons (16, 48, 128)
+├── assets/                    # Screenshots & demo media
+└── audit/                     # Code audit reports & roadmap
 ```
 
 ### Data Flow
@@ -131,9 +131,9 @@ chrome-extension/
 └──────────────┘              └────────────────┘            └──────────┘
 ```
 
-- **`background.js`** — Extension service worker. Listens to OS-level global `chrome.commands` and routes actions.
-- **`speech-engine.js`** — Runs in page's main world (required for mic access). Handles recognition, number parsing, and voice commands.
-- **`content.js`** — Runs in Chrome's isolated world. Manages FAB UI, draggable states, text cursor APIs, and overlay updates.
+- **`scripts/background.js`** — Service worker. Listens to global `chrome.commands` and routes actions.
+- **`scripts/speech-engine.js`** — Runs in page's main world (required for mic access). Handles recognition, number parsing, and voice commands.
+- **`scripts/content.js`** — Runs in Chrome's isolated world. Manages FAB UI, draggable states, text cursor APIs, and overlay updates.
 - **Communication** — `CustomEvent` between content ↔ engine, `chrome.runtime` between background/popup ↔ content.
 
 ### Why Main World Injection?
@@ -157,13 +157,20 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, coding standards, and tes
 
 ## 🔮 Roadmap
 
-- [ ] Extension Modularization (esbuild)
-- [ ] Offline mode via Vosk WASM
-- [x] Punctuation and formatting voice commands
-- [x] Copy-to-clipboard / Keyboard Shortcut overhaul
-- [ ] Settings page for deeper customization
+- [x] Split FAB (Quick Switch)  
+- [x] 35+ Voice Commands (Arabic & English)
+- [x] Text editing commands (undo, delete, clear)
+- [x] Global keyboard shortcuts (chrome.commands)
+- [x] Auto-show FAB preference toggle
+- [x] Accessibility (aria-labels, aria-live, reduced motion)
+- [x] Project folder restructuring
+- [x] Security audit fixes (XSS, permissions, sanitization)
+- [ ] Options page for deeper customization
 - [ ] Transcription History panel
-- [ ] Firefox / Edge extension port
+- [ ] Offline mode via Vosk WASM
+- [ ] Extension modularization (esbuild)
+- [ ] i18n via Chrome's `_locales` system
+- [ ] Firefox / Edge port
 
 ## 📄 License
 

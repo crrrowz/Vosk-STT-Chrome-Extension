@@ -12,7 +12,9 @@
     let currentLang = 'ar-IQ';
     let splitFab = false;
     let pendingLangStart = null;
-
+    let positionRafId = null; // ISSUE-17: rAF debounce for positionOverlay
+    let cachedInput = null;   // ISSUE-15: cached resolveTargetInput
+    let cachedInputTime = 0;  // ISSUE-15: cache timestamp
 
     const LANG_LABELS = {
         'ar-IQ': 'عربي', 'ar-SA': 'عربي', 'ar': 'عربي', 'en-US': 'EN'
@@ -21,24 +23,52 @@
         'ar-IQ': 'AR', 'ar-SA': 'AR', 'ar': 'AR', 'en-US': 'EN'
     };
 
+    /* ───── Utility: Extension Context Guard (ISSUE-04) ───── */
+
+    function isExtensionAlive() {
+        return !!chrome.runtime?.id;
+    }
+
+    /* ───── Utility: Text Sanitization (ISSUE-03) ───── */
+
+    function sanitizeText(text) {
+        if (!text) return '';
+        // Strip HTML tags and non-printable control chars (keep \n)
+        return text.replace(/<[^>]*>/g, '').replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    }
+
+    /* ───── Utility: Create SVG Mic Icon (ISSUE-01) ───── */
+
+    function createMicSvg() {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p1.setAttribute('d', 'M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z');
+        const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p2.setAttribute('d', 'M17 12C17 14.76 14.76 17 12 17C9.24 17 7 14.76 7 12H5C5 15.53 7.61 18.43 11 18.93V22H13V18.93C16.39 18.43 19 15.53 19 12H17Z');
+        svg.appendChild(p1);
+        svg.appendChild(p2);
+        return svg;
+    }
+
     /* ───── Inject Speech Engine ───── */
 
     let engineInjected = false;
     function injectSpeechEngine() {
         if (engineInjected) return;
         engineInjected = true;
-        // Remove old script if present (stale from previous extension load)
         const old = document.getElementById('vosk-stt-engine');
         if (old) old.remove();
         const script = document.createElement('script');
         script.id = 'vosk-stt-engine';
-        script.src = chrome.runtime.getURL('speech-engine.js');
+        script.src = chrome.runtime.getURL('scripts/speech-engine.js');
         (document.head || document.documentElement).appendChild(script);
     }
 
     injectSpeechEngine();
 
     function sendEngineCommand(command, lang) {
+        if (!isExtensionAlive()) return; // ISSUE-04
         document.dispatchEvent(new CustomEvent('vosk-stt-command', {
             detail: { command, lang }
         }));
@@ -51,14 +81,20 @@
 
         fab = document.createElement('button');
         fab.id = 'vosk-fab';
+        fab.setAttribute('aria-label', 'Toggle voice recording'); // ROAD-08
         renderFabContent();
 
         // Load saved position or default
-        chrome.storage?.local?.get(['fabPosition'], (r) => {
-            const pos = r?.fabPosition;
-            fab.style.bottom = pos?.bottom || '24px';
-            fab.style.right = pos?.right || '24px';
-        });
+        if (isExtensionAlive()) {
+            chrome.storage?.local?.get(['fabPosition'], (r) => {
+                if (chrome.runtime.lastError) return; // ISSUE-08
+                const pos = r?.fabPosition;
+                if (fab) {
+                    fab.style.bottom = pos?.bottom || '24px';
+                    fab.style.right = pos?.right || '24px';
+                }
+            });
+        }
 
         document.body.appendChild(fab);
         makeDraggable(fab);
@@ -67,17 +103,16 @@
             e.preventDefault();
             e.stopPropagation();
 
-            // In split mode, clicks on the halves have their propagation stopped,
-            // so this handler only triggers when clicking the central mic icon to play/pause.
             if (isRecording) {
                 stopRecognition();
             } else {
-                if (!chrome.runtime?.id) {
-                    console.warn('Vosk STT: Extension context invalidated. Please refresh the page.');
+                if (!isExtensionAlive()) {
+                    console.warn('[Vosk STT] Extension context invalidated. Please refresh.');
                     removeFab();
                     return;
                 }
                 chrome.storage?.local?.get(['sttLang'], (r) => {
+                    if (chrome.runtime.lastError) return; // ISSUE-08
                     currentLang = r?.sttLang || 'ar-IQ';
                     updateFabLang();
                     startRecognition(currentLang);
@@ -86,32 +121,45 @@
         });
     }
 
+    // ISSUE-01: Replace innerHTML with DOM API
     function renderFabContent() {
         if (!fab) return;
+
+        // Clear existing children
+        while (fab.firstChild) fab.removeChild(fab.firstChild);
+
         if (splitFab) {
             fab.classList.add('split');
-            fab.innerHTML = `
-                <svg viewBox="0 0 24 24">
-                    <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z"/>
-                    <path d="M17 12C17 14.76 14.76 17 12 17C9.24 17 7 14.76 7 12H5C5 15.53 7.61 18.43 11 18.93V22H13V18.93C16.39 18.43 19 15.53 19 12H17Z"/>
-                </svg>
-                <div id="vosk-fab-lang">${LANG_SHORT[currentLang] || 'AR'}</div>
-                <div class="vosk-fab-half${currentLang === 'en-US' ? ' active-lang' : ''}" data-lang="en-US">EN</div>
-                <div class="vosk-fab-half${currentLang.startsWith('ar') ? ' active-lang' : ''}" data-lang="ar-IQ">AR</div>
-            `;
-            // Attach click handlers to halves
-            fab.querySelectorAll('.vosk-fab-half').forEach(half => {
-                half.addEventListener('click', onHalfClick);
-            });
+
+            fab.appendChild(createMicSvg());
+
+            const langBadge = document.createElement('div');
+            langBadge.id = 'vosk-fab-lang';
+            langBadge.textContent = LANG_SHORT[currentLang] || 'AR';
+            fab.appendChild(langBadge);
+
+            const halfEn = document.createElement('div');
+            halfEn.className = 'vosk-fab-half' + (currentLang === 'en-US' ? ' active-lang' : '');
+            halfEn.dataset.lang = 'en-US';
+            halfEn.textContent = 'EN';
+            halfEn.addEventListener('click', onHalfClick);
+            fab.appendChild(halfEn);
+
+            const halfAr = document.createElement('div');
+            halfAr.className = 'vosk-fab-half' + (currentLang.startsWith('ar') ? ' active-lang' : '');
+            halfAr.dataset.lang = 'ar-IQ';
+            halfAr.textContent = 'AR';
+            halfAr.addEventListener('click', onHalfClick);
+            fab.appendChild(halfAr);
         } else {
             fab.classList.remove('split');
-            fab.innerHTML = `
-                <svg viewBox="0 0 24 24">
-                    <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z"/>
-                    <path d="M17 12C17 14.76 14.76 17 12 17C9.24 17 7 14.76 7 12H5C5 15.53 7.61 18.43 11 18.93V22H13V18.93C16.39 18.43 19 15.53 19 12H17Z"/>
-                </svg>
-                <div id="vosk-fab-lang">${LANG_SHORT[currentLang] || 'AR'}</div>
-            `;
+
+            fab.appendChild(createMicSvg());
+
+            const langBadge = document.createElement('div');
+            langBadge.id = 'vosk-fab-lang';
+            langBadge.textContent = LANG_SHORT[currentLang] || 'AR';
+            fab.appendChild(langBadge);
         }
     }
 
@@ -131,8 +179,8 @@
 
         currentLang = lang;
         try {
-            if (chrome.runtime?.id) chrome.storage?.local?.set({ sttLang: lang });
-        } catch (e) { }
+            if (isExtensionAlive()) chrome.storage?.local?.set({ sttLang: lang });
+        } catch (_err) { console.warn('[Vosk STT] storage set failed', _err); } // ISSUE-08, ISSUE-10
 
         updateSplitActive();
 
@@ -140,8 +188,8 @@
             pendingLangStart = lang;
             stopRecognition();
         } else {
-            if (!chrome.runtime?.id) {
-                console.warn('Vosk STT: Extension context invalidated. Please refresh the page.');
+            if (!isExtensionAlive()) {
+                console.warn('[Vosk STT] Extension context invalidated. Please refresh.');
                 removeFab();
                 return;
             }
@@ -224,7 +272,6 @@
             let newRight = initRight - dx;
             let newBottom = initBottom - dy;
 
-            // Clamp to viewport
             newRight = Math.max(4, Math.min(newRight, window.innerWidth - el.offsetWidth - 4));
             newBottom = Math.max(4, Math.min(newBottom, window.innerHeight - el.offsetHeight - 4));
 
@@ -246,14 +293,11 @@
             document.removeEventListener('touchmove', onMove);
             document.removeEventListener('touchend', onUp);
 
-            // Update wasDragged for click handler
             if (hasMoved) {
-                // Block the upcoming click
                 el.addEventListener('click', blockClick, { once: true, capture: true });
-                // Save position (ISSUE-13)
                 try {
                     chrome.storage?.local?.set({ fabPosition: { bottom: el.style.bottom, right: el.style.right } });
-                } catch (e) { }
+                } catch (_err) { console.warn('[Vosk STT] fab position save failed', _err); } // ISSUE-08, ISSUE-10
             }
         }
 
@@ -278,6 +322,7 @@
     document.addEventListener('focusin', (e) => {
         if (isInputElement(e.target)) {
             lastFocusedInput = e.target;
+            cachedInput = null; // ISSUE-15: invalidate cache on focus change
         }
     }, true);
 
@@ -318,15 +363,11 @@
                 break;
 
             case 'result': {
-                // Show ONLY interim text in the overlay
                 updateOverlayText('', data.interim || '🎤 Speak now...');
-
-                // Waves active when there's interim text (user is speaking)
                 setSpeaking(!!data.interim);
 
-                // Insert delta immediately
                 if (data.final && data.final.trim()) {
-                    const textToInsert = data.final.trim();
+                    const textToInsert = sanitizeText(data.final.trim()); // ISSUE-03
                     const target = targetInput || resolveTargetInput();
                     if (target) {
                         insertText(target, textToInsert);
@@ -401,11 +442,11 @@
             }
 
             case 'stopped':
-                if (!isRecording && !pendingLangStart) break; // Already stopped, ignore duplicate
+                if (!isRecording && !pendingLangStart) break;
                 isRecording = false;
                 updateFabState();
                 hideOverlay();
-                try { chrome.runtime.sendMessage({ action: 'stopped' }); } catch (e) { }
+                try { chrome.runtime.sendMessage({ action: 'stopped' }); } catch (_err) { /* tab may be closing */ }
                 if (pendingLangStart) {
                     const nextLang = pendingLangStart;
                     pendingLangStart = null;
@@ -483,40 +524,68 @@
         }
     }
 
+    // ISSUE-23: Check pickerActive before stopping
     function onPickerEscape(e) {
-        if (e.key === 'Escape') stopPicker();
+        if (!pickerActive) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            stopPicker();
+        }
     }
 
-    /* ───── Overlay ───── */
+    /* ───── Overlay (ISSUE-01: DOM API, ROAD-08: aria) ───── */
 
     function createOverlay() {
         if (overlay) return overlay;
         overlay = document.createElement('div');
         overlay.id = 'vosk-stt-overlay';
-        overlay.innerHTML = `
-      <div class="vosk-stt-card">
-        <div class="vosk-stt-header">
-          <div class="vosk-stt-dot"></div>
-          <span class="vosk-stt-label">Listening...</span>
-          <div class="vosk-stt-waves">
-            <div class="vosk-stt-wave"></div><div class="vosk-stt-wave"></div>
-            <div class="vosk-stt-wave"></div><div class="vosk-stt-wave"></div>
-            <div class="vosk-stt-wave"></div>
-          </div>
-        </div>
-        <div class="vosk-stt-text"><span class="partial">🎤 Speak now...</span></div>
-      </div>`;
+        overlay.setAttribute('role', 'status');       // ROAD-08
+        overlay.setAttribute('aria-live', 'polite');   // ROAD-08
+
+        const card = document.createElement('div');
+        card.className = 'vosk-stt-card';
+
+        const header = document.createElement('div');
+        header.className = 'vosk-stt-header';
+
+        const dot = document.createElement('div');
+        dot.className = 'vosk-stt-dot';
+        header.appendChild(dot);
+
+        const label = document.createElement('span');
+        label.className = 'vosk-stt-label';
+        label.textContent = 'Listening...';
+        header.appendChild(label);
+
+        const waves = document.createElement('div');
+        waves.className = 'vosk-stt-waves';
+        for (let i = 0; i < 5; i++) {
+            const w = document.createElement('div');
+            w.className = 'vosk-stt-wave';
+            waves.appendChild(w);
+        }
+        header.appendChild(waves);
+        card.appendChild(header);
+
+        const textEl = document.createElement('div');
+        textEl.className = 'vosk-stt-text';
+        const partial = document.createElement('span');
+        partial.className = 'partial';
+        partial.textContent = '🎤 Speak now...';
+        textEl.appendChild(partial);
+        card.appendChild(textEl);
+
+        overlay.appendChild(card);
         document.body.appendChild(overlay);
         return overlay;
     }
 
     function positionOverlay() {
         if (!overlay) return;
-        // Always position above the FAB (bottom-right)
         if (fab) {
             const fabRect = fab.getBoundingClientRect();
             const oh = overlay.offsetHeight || 80;
-            const ow = overlay.offsetWidth || 300;
             const top = fabRect.top - oh - 12;
             const right = window.innerWidth - fabRect.right;
             Object.assign(overlay.style, {
@@ -528,6 +597,15 @@
         } else {
             Object.assign(overlay.style, { position: 'fixed', bottom: '90px', right: '24px', top: '', left: '' });
         }
+    }
+
+    // ISSUE-17: rAF-debounced position update
+    function schedulePositionOverlay() {
+        if (positionRafId) cancelAnimationFrame(positionRafId);
+        positionRafId = requestAnimationFrame(() => {
+            positionOverlay();
+            positionRafId = null;
+        });
     }
 
     function showOverlay() {
@@ -545,13 +623,16 @@
         if (label) label.textContent = text;
     }
 
+    // ISSUE-21: Capture overlay ref in closure to prevent stale removal
     function hideOverlay() {
         if (!overlay) return;
-        overlay.classList.remove('visible');
-        overlay.classList.add('fade-out');
+        const overlayRef = overlay;
+        overlayRef.classList.remove('visible');
+        overlayRef.classList.add('fade-out');
         hideTimeout = setTimeout(() => {
-            overlay?.remove();
-            overlay = null;
+            overlayRef.remove();
+            // Only null the global if it's still the same element
+            if (overlay === overlayRef) overlay = null;
         }, 500);
     }
 
@@ -578,33 +659,49 @@
             s.textContent = '🎤 Speak now...';
             el.appendChild(s);
         }
-        positionOverlay();
+        schedulePositionOverlay(); // ISSUE-17: debounced
     }
 
     /* ───── Input Resolution & Text Insertion ───── */
 
+    // ISSUE-15: Cached resolveTargetInput with 2s TTL
     function resolveTargetInput() {
-        if (targetInput && document.body.contains(targetInput)) return targetInput;
-        if (lastFocusedInput && document.body.contains(lastFocusedInput)) return lastFocusedInput;
-        const el = document.activeElement;
-        if (el && isInputElement(el)) return el;
-        const inputs = document.querySelectorAll('input[type="text"],input[type="search"],input:not([type]),textarea,[contenteditable="true"],[role="textbox"]');
-        for (const inp of inputs) {
-            const r = inp.getBoundingClientRect();
-            if (r.width > 0 && r.height > 0 && r.top >= 0 && r.top < window.innerHeight) return inp;
+        if (cachedInput && document.body.contains(cachedInput) && (Date.now() - cachedInputTime < 2000)) {
+            return cachedInput;
         }
-        return null;
+        let result = null;
+        if (targetInput && document.body.contains(targetInput)) {
+            result = targetInput;
+        } else if (lastFocusedInput && document.body.contains(lastFocusedInput)) {
+            result = lastFocusedInput;
+        } else {
+            const el = document.activeElement;
+            if (el && isInputElement(el)) {
+                result = el;
+            } else {
+                const inputs = document.querySelectorAll('input[type="text"],input[type="search"],input:not([type]),textarea,[contenteditable="true"],[role="textbox"]');
+                for (const inp of inputs) {
+                    const r = inp.getBoundingClientRect();
+                    if (r.width > 0 && r.height > 0 && r.top >= 0 && r.top < window.innerHeight) {
+                        result = inp;
+                        break;
+                    }
+                }
+            }
+        }
+        cachedInput = result;
+        cachedInputTime = Date.now();
+        return result;
     }
 
     function insertText(el, text) {
         if (!el || !text) return;
+        text = sanitizeText(text); // ISSUE-03
         el.focus();
         if (el.isContentEditable || el.getAttribute?.('role') === 'textbox') {
-            // Safely move cursor to end WITHOUT selecting all text
             const sel = window.getSelection();
             const range = document.createRange();
 
-            // Find deepest last text node (O(depth) instead of O(n))
             let lastNode = el;
             while (lastNode.lastChild) {
                 if (lastNode.lastChild.nodeType === Node.TEXT_NODE) { lastNode = lastNode.lastChild; break; }
@@ -616,7 +713,7 @@
                 range.collapse(true);
             } else {
                 range.selectNodeContents(el);
-                range.collapse(false); // collapse to end
+                range.collapse(false);
             }
             sel.removeAllRanges();
             sel.addRange(range);
@@ -624,12 +721,10 @@
             const existing = el.textContent || '';
             const sep = existing && !existing.endsWith(' ') ? ' ' : '';
             if (!document.execCommand('insertText', false, sep + text)) {
-                // Fallback: append text node
                 el.appendChild(document.createTextNode(sep + text));
                 el.dispatchEvent(new Event('input', { bubbles: true }));
             }
         } else {
-            // Always append at end, ignore selection
             const existing = el.value || '';
             const sep = existing && !existing.endsWith(' ') ? ' ' : '';
             const nv = existing + sep + text;
@@ -644,36 +739,42 @@
     /* ───── Start / Stop ───── */
 
     function startRecognition(lang) {
+        if (!isExtensionAlive()) { // ISSUE-04
+            removeFab();
+            return;
+        }
         targetInput = resolveTargetInput();
         isRecording = true;
         updateFabState();
         showOverlay();
-        // Notify background to stop any other tab's recording
         try {
             chrome.runtime.sendMessage({ action: 'startRecordingFromTab', tabId: 'self' });
-        } catch (e) { }
+        } catch (_err) { console.warn('[Vosk STT] startRecordingFromTab failed', _err); } // ISSUE-08, ISSUE-10
         setTimeout(() => sendEngineCommand('start', lang), 100);
     }
 
     function stopRecognition() {
         sendEngineCommand('stop');
-        // State cleanup handled by 'stopped' event handler
     }
 
-    /* ───── Chrome Message Listener ───── */
+    /* ───── Chrome Message Listener (ISSUE-14: proper async sendResponse) ───── */
 
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (msg.action === 'ping') { sendResponse({ ok: true }); return true; }
+
         if (msg.action === 'checkFab') {
             sendResponse({ hasFab: !!fab });
             return true;
         }
+
         if (msg.action === 'showFab') {
             if (fab) {
                 removeFab();
                 sendResponse({ ok: true });
             } else {
+                if (!isExtensionAlive()) { sendResponse({ ok: false }); return true; }
                 chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
+                    if (chrome.runtime.lastError) { sendResponse({ ok: false }); return; }
                     currentLang = r?.sttLang || 'ar-IQ';
                     splitFab = !!r?.splitFab;
                     createFab();
@@ -681,44 +782,79 @@
                     sendResponse({ ok: true });
                 });
             }
-        } else if (msg.action === 'setLang') {
+            return true; // ISSUE-14: keep channel open for async
+        }
+
+        if (msg.action === 'setLang') {
             currentLang = msg.lang || 'ar-IQ';
             updateFabLang();
             updateSplitActive();
             sendResponse({ ok: true });
-        } else if (msg.action === 'setSplit') {
+            return true;
+        }
+
+        if (msg.action === 'setSplit') {
             splitFab = !!msg.split;
             if (fab) renderFabContent();
             sendResponse({ ok: true });
-        } else if (msg.action === 'pickInput') {
+            return true;
+        }
+
+        if (msg.action === 'pickInput') {
             startPicker();
             sendResponse({ ok: true });
-        } else if (msg.action === 'start') {
+            return true;
+        }
+
+        if (msg.action === 'start') {
             currentLang = msg.lang || 'ar-IQ';
             createFab();
             startRecognition(currentLang);
             sendResponse({ ok: true });
-        } else if (msg.action === 'stop') {
-            stopRecognition();
+            return true;
+        }
+
+        // ISSUE-22: Show toast when stopped by another tab
+        if (msg.action === 'stop') {
+            if (isRecording) {
+                updateOverlayText('', '🔄 Recording moved to another tab');
+                setTimeout(() => {
+                    stopRecognition();
+                }, 1200);
+            } else {
+                stopRecognition();
+            }
             sendResponse({ ok: true });
-        } else if (msg.action === 'toggleRecording') {
+            return true;
+        }
+
+        if (msg.action === 'toggleRecording') {
             if (!fab) {
+                if (!isExtensionAlive()) { sendResponse({ ok: false }); return true; }
                 chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
+                    if (chrome.runtime.lastError) { sendResponse({ ok: false }); return; }
                     currentLang = r?.sttLang || 'ar-IQ';
                     splitFab = !!r?.splitFab;
                     createFab();
                     startRecognition(currentLang);
+                    sendResponse({ ok: true });
                 });
             } else if (isRecording) {
                 stopRecognition();
+                sendResponse({ ok: true });
             } else {
                 startRecognition(currentLang);
+                sendResponse({ ok: true });
             }
-            sendResponse({ ok: true });
-        } else if (msg.action === 'switchLang') {
+            return true; // ISSUE-14
+        }
+
+        if (msg.action === 'switchLang') {
             sendEngineCommand('switchLang');
             sendResponse({ ok: true });
+            return true;
         }
+
         return true;
     });
 
@@ -728,9 +864,12 @@
         if (e.altKey && e.key.toLowerCase() === 's') {
             e.preventDefault();
             if (!fab) {
+                if (!isExtensionAlive()) return;
                 chrome.storage?.local?.get(['sttLang'], (r) => {
+                    if (chrome.runtime.lastError) return;
                     currentLang = r?.sttLang || 'ar-IQ';
                     createFab();
+                    startRecognition(currentLang); // ISSUE-20: also start recording
                 });
             } else if (isRecording) {
                 stopRecognition();
@@ -748,13 +887,33 @@
         }
     });
 
-    // Auto-show FAB by default on page load
-    chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
-        currentLang = r?.sttLang || 'ar-IQ';
-        splitFab = !!r?.splitFab;
-        createFab();
-        updateFabLang();
-    });
+    // ISSUE-18 + ROAD-01: Auto-show FAB based on user preference
+    if (isExtensionAlive()) {
+        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow'], (r) => {
+            if (chrome.runtime.lastError) return;
+            // Default to true if preference not set
+            if (r?.fabAutoShow === false) return;
+            currentLang = r?.sttLang || 'ar-IQ';
+            splitFab = !!r?.splitFab;
+            createFab();
+            updateFabLang();
+        });
 
-    console.log('[Vosk STT] Content script loaded');
+        // Live-react to fabAutoShow toggle
+        chrome.storage.onChanged.addListener((changes, area) => {
+            if (area !== 'local' || !changes.fabAutoShow) return;
+            if (changes.fabAutoShow.newValue === false) {
+                if (isRecording) stopRecognition();
+                removeFab();
+            } else if (changes.fabAutoShow.newValue === true && !fab) {
+                chrome.storage?.local?.get(['sttLang', 'splitFab'], (r) => {
+                    if (chrome.runtime.lastError) return;
+                    currentLang = r?.sttLang || 'ar-IQ';
+                    splitFab = !!r?.splitFab;
+                    createFab();
+                    updateFabLang();
+                });
+            }
+        });
+    }
 })();

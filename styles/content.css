@@ -335,3 +335,23 @@
 #vosk-fab.split.recording .vosk-fab-half.active-lang {
     background: rgba(225, 60, 94, 0.45);
 }
+
+/* ROAD-08: Accessibility — respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    #vosk-stt-overlay,
+    .vosk-stt-card,
+    .vosk-stt-dot,
+    .vosk-stt-wave,
+    #vosk-fab,
+    #vosk-fab svg,
+    .vosk-fab-half {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* Focus-visible outlines for keyboard navigation */
+#vosk-fab:focus-visible {
+    outline: 2px solid #4F8FFF;
+    outline-offset: 3px;
+}

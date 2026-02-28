@@ -9,10 +9,10 @@
         "scripting"
     ],
     "background": {
-        "service_worker": "background.js"
+        "service_worker": "scripts/background.js"
     },
     "action": {
-        "default_popup": "popup.html",
+        "default_popup": "popup/popup.html",
         "default_icon": {
             "16": "icons/icon16.png",
             "48": "icons/icon48.png",
@@ -51,10 +51,10 @@
                 "https://*/*"
             ],
             "js": [
-                "content.js"
+                "scripts/content.js"
             ],
             "css": [
-                "content.css"
+                "styles/content.css"
             ],
             "run_at": "document_idle"
         }
@@ -62,7 +62,7 @@
     "web_accessible_resources": [
         {
             "resources": [
-                "speech-engine.js"
+                "scripts/speech-engine.js"
             ],
             "matches": [
                 "http://*/*",

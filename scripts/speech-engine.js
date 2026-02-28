@@ -12,7 +12,7 @@
     let shouldBeRunning = false;
     let currentLang = 'ar-IQ';
     let restartCount = 0;
-    let stopGeneration = 0; // Incremented on every stop to invalidate pending restarts
+    let stopGeneration = 0;
     const MAX_RESTARTS = 50;
 
     /* ═══════════════════════════════════════════
@@ -115,7 +115,7 @@
         return result;
     }
 
-    // Pre-compiled regex patterns for postProcess (ISSUE-06 fix)
+    // Pre-compiled regex patterns for postProcess
     const BAL = 'ب[اـ]?ل\\s*';
     const RE_TENTH = new RegExp(`(${NUM_WORD_PATTERN})\\s+${BAL}عشر[ةه]?`, 'g');
     const RE_PERCENT_W = new RegExp(`(${NUM_WORD_PATTERN})\\s+${BAL}م[ئي][ةه]`, 'g');
@@ -129,37 +129,47 @@
     const RE_THOUSAND_D = /(\d+)\s+بال\s*[اأآ]لف/g;
     const RE_MILLION_D = /(\d+)\s+بال\s*مليون/g;
 
+    // ISSUE-16: Arabic character test for early-exit optimization
+    const HAS_ARABIC_RE = /[\u0600-\u06FF]/;
+    const HAS_DIGIT_RE = /\d/;
+
     function postProcess(text) {
         if (!text) return text;
 
-        text = text.replace(RE_TENTH, (m, w) => {
-            const n = parseArabicNumber(w); return n !== null ? (n / 10).toString() : m;
-        });
-        text = text.replace(RE_PERCENT_W, (m, w) => {
-            const n = parseArabicNumber(w); return n !== null ? n + '%' : m;
-        });
-        text = text.replace(RE_THOUSAND_W, (m, w) => {
-            const n = parseArabicNumber(w); return n !== null ? (n / 1000).toString() : m;
-        });
-        text = text.replace(RE_MILLION_W, (m, w) => {
-            const n = parseArabicNumber(w); return n !== null ? (n / 1000000).toString() : m;
-        });
-        text = text.replace(RE_DECIMAL_W, (m, a, b) => {
-            const na = parseArabicNumber(a), nb = parseArabicNumber(b);
-            return (na !== null && nb !== null) ? `${na}.${nb}` : m;
-        });
+        // ISSUE-16: Skip Arabic number processing if text is pure non-Arabic
+        if (HAS_ARABIC_RE.test(text)) {
+            text = text.replace(RE_TENTH, (m, w) => {
+                const n = parseArabicNumber(w); return n !== null ? (n / 10).toString() : m;
+            });
+            text = text.replace(RE_PERCENT_W, (m, w) => {
+                const n = parseArabicNumber(w); return n !== null ? n + '%' : m;
+            });
+            text = text.replace(RE_THOUSAND_W, (m, w) => {
+                const n = parseArabicNumber(w); return n !== null ? (n / 1000).toString() : m;
+            });
+            text = text.replace(RE_MILLION_W, (m, w) => {
+                const n = parseArabicNumber(w); return n !== null ? (n / 1000000).toString() : m;
+            });
+            text = text.replace(RE_DECIMAL_W, (m, a, b) => {
+                const na = parseArabicNumber(a), nb = parseArabicNumber(b);
+                return (na !== null && nb !== null) ? `${na}.${nb}` : m;
+            });
 
-        text = text.replace(NUM_SEQUENCE_REGEX, (match) => {
-            const num = parseArabicNumber(match);
-            return num !== null ? num.toString() : match;
-        });
+            text = text.replace(NUM_SEQUENCE_REGEX, (match) => {
+                const num = parseArabicNumber(match);
+                return num !== null ? num.toString() : match;
+            });
+        }
 
-        text = text.replace(RE_DECIMAL_D, '$1.$2');
-        text = text.replace(RE_DOT_D, '$1.$2');
-        text = text.replace(RE_PERCENT_D, '$1%');
-        text = text.replace(RE_TENTH_D, (m, n) => (parseInt(n) / 10).toString());
-        text = text.replace(RE_THOUSAND_D, (m, n) => (parseInt(n) / 1000).toString());
-        text = text.replace(RE_MILLION_D, (m, n) => (parseInt(n) / 1000000).toString());
+        // ISSUE-16: Skip digit-based replacements if no digits present
+        if (HAS_DIGIT_RE.test(text)) {
+            text = text.replace(RE_DECIMAL_D, '$1.$2');
+            text = text.replace(RE_DOT_D, '$1.$2');
+            text = text.replace(RE_PERCENT_D, '$1%');
+            text = text.replace(RE_TENTH_D, (m, n) => (parseInt(n) / 10).toString());
+            text = text.replace(RE_THOUSAND_D, (m, n) => (parseInt(n) / 1000).toString());
+            text = text.replace(RE_MILLION_D, (m, n) => (parseInt(n) / 1000000).toString());
+        }
 
         return text;
     }
@@ -190,7 +200,6 @@
         'delete': '__CMD:delete', 'delete that': '__CMD:delete',
     };
 
-    // Build sorted keys for matching (longest first)
     const CMD_KEYS = Object.keys(VOICE_COMMANDS).sort((a, b) => b.length - a.length);
 
     function processVoiceCommands(text) {
@@ -222,7 +231,7 @@
             emit('langChanged', { lang: currentLang });
             if (shouldBeRunning) {
                 restartCount = 0;
-                if (recognition) { try { recognition.abort(); } catch (e) { } recognition = null; }
+                if (recognition) { try { recognition.abort(); } catch (_err) { } recognition = null; }
                 startRecognition(currentLang);
             }
         }
@@ -239,10 +248,9 @@
     }
 
     function startRecognition(lang) {
-        // Guard: don't start if stop was requested
         if (!shouldBeRunning) return;
 
-        if (recognition) { try { recognition.abort(); } catch (e) { } recognition = null; }
+        if (recognition) { try { recognition.abort(); } catch (_err) { } recognition = null; }
 
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) { emit('error', { error: 'unsupported' }); return; }
@@ -254,7 +262,6 @@
         recognition.maxAlternatives = 1;
 
         let emittedLength = 0;
-        // Capture the current generation so stale onend handlers won't restart
         const myGeneration = stopGeneration;
 
         recognition.onstart = () => emit('started', {});
@@ -274,16 +281,13 @@
             }
 
             const rawDelta = allFinal.substring(emittedLength).trim();
-
-            // Check for voice commands first
             const cmdResult = rawDelta ? processVoiceCommands(rawDelta) : null;
 
             if (cmdResult && cmdResult.startsWith('__CMD:')) {
-                // Emit command event for content.js to handle
                 emit('voiceCommand', { command: cmdResult.substring(6) });
             } else {
                 const processed = cmdResult && cmdResult !== rawDelta
-                    ? cmdResult  // Voice command produced punctuation/newline
+                    ? cmdResult
                     : (rawDelta ? postProcess(rawDelta) : '');
 
                 emit('result', {
@@ -308,7 +312,6 @@
 
         recognition.onend = () => {
             recognition = null;
-            // If generation changed, a stop was issued — don't restart
             if (myGeneration !== stopGeneration) {
                 emit('stopped', {});
                 return;
@@ -329,14 +332,14 @@
         };
 
         try { recognition.start(); }
-        catch (e) { emit('error', { error: 'start-failed', message: e.message }); }
+        catch (_err) { emit('error', { error: 'start-failed', message: _err.message }); }
     }
 
     function stopRecognition() {
         shouldBeRunning = false;
-        stopGeneration++; // Invalidate any pending restart timeouts
+        stopGeneration++;
         if (recognition) {
-            try { recognition.abort(); } catch (e) { }
+            try { recognition.abort(); } catch (_err) { }
             recognition = null;
         }
         emit('stopped', {});
@@ -347,6 +350,4 @@
         stopRecognition();
         document.removeEventListener('vosk-stt-command', handleCommand);
     };
-
-    console.log('[Vosk STT Engine] Ready ✓');
 })();

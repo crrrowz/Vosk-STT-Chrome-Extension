@@ -31,7 +31,17 @@
       </label>
     </div>
 
-    <button id="toggleBtn" class="main-btn">🎤 Show Mic Button</button>
+    <!-- ROAD-01: Auto-show FAB toggle -->
+    <div class="toggle-row">
+      <label class="toggle-label" for="autoShowToggle">🎤 Auto-show Mic</label>
+      <label class="switch">
+        <input type="checkbox" id="autoShowToggle" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- ISSUE-19: Default to "Hide Mic Button" since FAB auto-shows -->
+    <button id="toggleBtn" class="main-btn">🎤 Hide Mic Button</button>
     <button id="pickBtn" class="pick-btn">🎯 Pick Input Field</button>
 
     <div class="shortcuts">
