@@ -66,13 +66,33 @@
         langScript.id = 'vosk-stt-languages';
         langScript.src = chrome.runtime.getURL('scripts/languages.js');
         (document.head || document.documentElement).appendChild(langScript);
-        // Then inject speech engine
+
+        // Chain: languages.js → lang modules → speech-engine.js
         const old = document.getElementById('vosk-stt-engine');
         if (old) old.remove();
-        const script = document.createElement('script');
-        script.id = 'vosk-stt-engine';
-        script.src = chrome.runtime.getURL('scripts/speech-engine.js');
-        langScript.onload = () => (document.head || document.documentElement).appendChild(script);
+
+        langScript.onload = () => {
+            // Auto-derive lang modules from VOSK_LANGUAGES config
+            const langs = window.VOSK_LANG_CONFIG?.languages || window.VOSK_LANGUAGES || [];
+            const prefixes = [...new Set(langs.map(l => l.code.split('-')[0]))];
+
+            let chain = Promise.resolve();
+            for (const prefix of prefixes) {
+                chain = chain.then(() => new Promise(resolve => {
+                    const s = document.createElement('script');
+                    s.src = chrome.runtime.getURL(`scripts/lang/${prefix}.js`);
+                    s.onload = resolve;
+                    s.onerror = resolve; // missing module = skip silently
+                    (document.head || document.documentElement).appendChild(s);
+                }));
+            }
+            chain.then(() => {
+                const engine = document.createElement('script');
+                engine.id = 'vosk-stt-engine';
+                engine.src = chrome.runtime.getURL('scripts/speech-engine.js');
+                (document.head || document.documentElement).appendChild(engine);
+            });
+        };
     }
 
     injectSpeechEngine();
@@ -402,29 +422,43 @@
                 break;
 
             case 'result': {
-                updateOverlayText('', data.interim || (insertBuffer ? insertBuffer : '🎤 Speak now...'));
-                setSpeaking(!!data.interim);
+                const hasInterim = !!data.interim;
+                const hasFinal = data.final && data.final.trim();
 
-                if (data.final && data.final.trim()) {
+                if (hasFinal) {
                     const textToInsert = sanitizeText(data.final.trim());
                     if (insertDelay > 0) {
-                        // Buffer mode: accumulate and debounce
+                        // Buffer mode: accumulate text
                         insertBuffer += (insertBuffer ? ' ' : '') + textToInsert;
-                        updateOverlayText('', insertBuffer);
-                        clearTimeout(insertTimer);
-                        insertTimer = setTimeout(() => {
-                            const target = targetInput || resolveTargetInput();
-                            if (target && insertBuffer) insertText(target, insertBuffer);
-                            insertBuffer = '';
-                            updateOverlayText('', '🎤 Speak now...');
-                            insertTimer = null;
-                        }, insertDelay);
                     } else {
                         // Instant mode
                         const target = targetInput || resolveTargetInput();
                         if (target) insertText(target, textToInsert);
                     }
                 }
+
+                // Update overlay: show buffer + current interim together
+                if (insertDelay > 0 && (insertBuffer || hasInterim)) {
+                    const preview = [insertBuffer, data.interim].filter(Boolean).join(' ');
+                    updateOverlayText('', preview);
+                } else {
+                    updateOverlayText('', data.interim || (insertBuffer ? insertBuffer : '🎤 Speak now...'));
+                }
+
+                setSpeaking(hasInterim);
+
+                // Reset flush timer on ANY speech activity (interim or final)
+                if (insertDelay > 0 && (hasInterim || hasFinal)) {
+                    clearTimeout(insertTimer);
+                    insertTimer = setTimeout(() => {
+                        const target = targetInput || resolveTargetInput();
+                        if (target && insertBuffer) insertText(target, insertBuffer);
+                        insertBuffer = '';
+                        updateOverlayText('', '🎤 Speak now...');
+                        insertTimer = null;
+                    }, insertDelay);
+                }
+
                 break;
             }
 
@@ -488,6 +522,17 @@
                         target.dispatchEvent(new Event('input', { bubbles: true }));
                     }
                     updateOverlayText('', '↩️ Deleted last word');
+                } else if (data.command === 'selectAll') {
+                    if (target.isContentEditable || target.getAttribute?.('role') === 'textbox') {
+                        const range = document.createRange();
+                        range.selectNodeContents(target);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } else {
+                        target.select();
+                    }
+                    updateOverlayText('', '✅ Selected all');
                 }
                 setSpeaking(false);
                 break;
@@ -977,7 +1022,9 @@
         // Live-react to fabAutoShow toggle
         chrome.storage.onChanged.addListener((changes, area) => {
             if (area !== 'local') return;
-            if (changes.insertDelay) insertDelay = changes.insertDelay.newValue || 0;
+            if (changes.insertDelay) {
+                insertDelay = changes.insertDelay.newValue || 0;
+            }
             if (!changes.fabAutoShow) return;
             if (changes.fabAutoShow.newValue === false) {
                 if (isRecording) stopRecognition();

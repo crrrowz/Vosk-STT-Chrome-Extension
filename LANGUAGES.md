@@ -2,52 +2,96 @@
 
 This guide explains how to add new languages to the Vosk STT extension.
 
-## Supported Languages
+## Architecture
 
-The Web Speech API supports any language with a [BCP-47 language tag](https://www.ietf.org/rfc/bcp/bcp47.txt). 
+Language support has **two layers**:
 
-### Currently Active
-| Code | Language | Default |
-|------|----------|---------|
-| `ar-IQ` | Arabic (Iraq) | ✅ |
-| `en-US` | English (United States) | |
+1. **Basic** (required): Add to `scripts/languages.js` — enables recognition for any language
+2. **NLP Module** (optional): Create `scripts/lang/{code}.js` — adds number conversion, voice commands, text normalization, and phonetic fuzzy matching
 
-## How to Add a New Language
+Without an NLP module, a language still works for basic speech-to-text. The NLP module adds intelligence.
 
-### ✅ One-Step Process
+## Currently Active
 
-Open `scripts/languages.js` and add **one line** to the `VOSK_LANGUAGES` array:
+| Code | Language | Default | NLP Module |
+|------|----------|---------|------------|
+| `ar-IQ` | Arabic (Iraq) | ✅ | `lang/ar.js` — normalizer, numbers, soundex, 30+ commands |
+| `en-US` | English (US) | | `lang/en.js` — 25+ commands |
+
+## Step 1: Add Language (Required)
+
+Open `scripts/languages.js` and add one line:
 
 ```javascript
 const VOSK_LANGUAGES = [
     { code: 'ar-IQ', label: 'عربي', short: 'AR', rtl: true },
     { code: 'en-US', label: 'EN', short: 'EN', rtl: false },
-    { code: 'fr-FR', label: 'FR', short: 'FR', rtl: false },  // ← just add this
+    { code: 'fr-FR', label: 'FR', short: 'FR', rtl: false },  // ← add this
 ];
 ```
 
-**That's it.** The entire extension updates automatically:
+**That's it for basic support.** The extension updates automatically:
 - ✅ Popup shows a new language chip
 - ✅ FAB badge displays the correct short code
-- ✅ Overlay header shows the correct label
 - ✅ `Alt+L` cycles through all registered languages
 
-### Field Reference
+## Step 2: Create NLP Module (Optional)
+
+Create `scripts/lang/fr.js` with this structure:
+
+```javascript
+(() => {
+    'use strict';
+    window.__voskLangModules = window.__voskLangModules || {};
+
+    window.__voskLangModules['fr'] = {
+        match: (langCode) => langCode.startsWith('fr'),
+        normalize: (text) => text,  // optional text normalization
+        postProcess: (text) => text, // optional number/format conversion
+
+        voiceCommands: {
+            'nouvelle ligne': '\n',
+            'virgule': ',',
+            'point': '.',
+            'point interrogation': '?',
+            'tout effacer': '__CMD:clear',
+            'annuler': '__CMD:undo',
+            'supprimer': '__CMD:delete',
+            'tout sélectionner': '__CMD:selectAll',
+        },
+    };
+})();
+```
+
+**That's it.** Drop the file in `scripts/lang/` and it will be auto-discovered from Language Names. No changes to `content.js` or `manifest.json` needed.
+
+### Module API
+
+| Property | Type | Required | Purpose |
+|----------|------|----------|---------|
+| `match(langCode)` | Function → bool | ✅ | Returns `true` if this module handles the given language code |
+| `normalize(text)` | Function → string | | Text normalization (e.g. Arabic diacritics removal) |
+| `postProcess(text)` | Function → string | | Number conversion, formatting |
+| `soundex(text)` | Function → string | | Phonetic collapsing for fuzzy command matching |
+| `voiceCommands` | Object | | Key-value map: spoken phrase → character or `__CMD:action` |
+
+### Voice Command Types
+
+| Prefix | Behavior | Example |
+|--------|----------|---------|
+| *(none)* | Inline text replacement | `'virgule': ','` — inserts `,` |
+| `__CMD:` | Triggers action in content.js | `'__CMD:clear'` — clears input |
+
+Available commands: `clear`, `undo`, `delete`, `selectAll`
+
+## Field Reference
 
 | Field | Purpose | Example |
-|-------|---------|---------|
-| `code` | BCP-47 language code for the Web Speech API | `'fr-FR'` |
-| `label` | Text shown on the popup chip button | `'FR'` or `'Français'` |
-| `short` | 2-letter code shown on the FAB badge | `'FR'` |
-| `rtl` | `true` for right-to-left languages | `false` |
-
-### Test
-
-1. Reload the extension (`chrome://extensions` → ↻)
-2. Reload the page
-3. Open popup → new language chip should appear
-4. Click it and speak → verify recognition works
-5. Press `Alt+L` → verify it cycles through all languages
+|-------|---------|---------| 
+| `code` | BCP-47 language code | `'fr-FR'` |
+| `label` | Text on popup chip | `'FR'` or `'Français'` |
+| `short` | 2-letter FAB badge | `'FR'` |
+| `rtl` | Right-to-left flag | `false` |
 
 ## Common Language Codes
 
@@ -76,11 +120,6 @@ For RTL languages (Arabic, Hebrew, Persian):
 - The overlay and FAB already support RTL via `direction: rtl`
 - Text insertion respects cursor position
 
-## Offline Languages (Vosk)
+## AI Post-Processing
 
-> **Note:** Offline mode is a planned feature and not yet implemented.
-
-To use Vosk for offline recognition in the future:
-1. Download a model from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)
-2. The extension would need `vosk-browser` WASM integration
-3. See the roadmap in `audit/03-future-roadmap.md` for progress
+The **🤖 AI Formatting** toggle in the popup works for **all languages** — it uses Gemini Nano to add punctuation and fix spelling regardless of which language module is active. It requires Chrome 128+ with the Prompt API enabled.

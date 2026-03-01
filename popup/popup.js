@@ -160,6 +160,7 @@
         });
     }
 
+
     async function ensureContentScript(tabId, tabUrl) {
         if (tabUrl && RESTRICTED_RE.test(tabUrl)) {
             throw new Error('restricted');

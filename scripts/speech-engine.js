@@ -1,9 +1,9 @@
-// Speech engine - runs in PAGE main world for mic access
+// Speech engine core - runs in PAGE main world for mic access
+// Language modules are loaded separately from scripts/lang/*.js
 // Re-injectable: cleans up old handlers on reload
 (() => {
     'use strict';
 
-    // Clean up previous version if exists
     if (window.__voskSttCleanup) {
         window.__voskSttCleanup();
     }
@@ -16,227 +16,133 @@
     const MAX_RESTARTS = 50;
 
     /* ═══════════════════════════════════════════
-       Compositional Arabic Number Parser
+       Language Module Registry
        ═══════════════════════════════════════════ */
 
-    const UNITS = {
-        'صفر': 0, 'واحد': 1, 'وحده': 1, 'وحدة': 1, 'اثنين': 2, 'اثنان': 2, 'ثنين': 2,
-        'ثلاثة': 3, 'ثلاث': 3, 'اربعة': 4, 'أربعة': 4, 'اربع': 4, 'أربع': 4,
-        'خمسة': 5, 'خمس': 5, 'ستة': 6, 'ست': 6,
-        'سبعة': 7, 'سبع': 7, 'ثمانية': 8, 'ثمان': 8, 'ثماني': 8,
-        'تسعة': 9, 'تسع': 9,
-    };
+    const modules = window.__voskLangModules || {};
 
-    const TEENS = {
-        'احد عشر': 11, 'أحد عشر': 11, 'حدعشر': 11, 'حداشر': 11,
-        'اثني عشر': 12, 'اثنا عشر': 12, 'اثناعشر': 12, 'اثنعشر': 12,
-        'ثلاث عشر': 13, 'ثلاثة عشر': 13, 'ثلاثعشر': 13, 'ثلطعشر': 13,
-        'اربع عشر': 14, 'أربعة عشر': 14, 'اربعطعشر': 14, 'اربعتعشر': 14,
-        'خمس عشر': 15, 'خمسة عشر': 15, 'خمسطعشر': 15, 'خمستعشر': 15,
-        'ست عشر': 16, 'ستة عشر': 16, 'ستطعشر': 16, 'سطعشر': 16, 'ستاشر': 16,
-        'سبع عشر': 17, 'سبعة عشر': 17, 'سبعطعشر': 17, 'سبعتعشر': 17,
-        'ثمان عشر': 18, 'ثمانية عشر': 18, 'ثمنطعشر': 18, 'ثمانتعشر': 18,
-        'تسع عشر': 19, 'تسعة عشر': 19, 'تسعطعشر': 19, 'تسعتعشر': 19,
-    };
-
-    const TENS = {
-        'عشرة': 10, 'عشر': 10,
-        'عشرين': 20, 'ثلاثين': 30, 'ثلثين': 30,
-        'اربعين': 40, 'أربعين': 40,
-        'خمسين': 50, 'ستين': 60,
-        'سبعين': 70, 'ثمانين': 80, 'تسعين': 90,
-    };
-
-    const HUNDREDS = {
-        'مئة': 100, 'مية': 100, 'مائة': 100, 'ميه': 100,
-        'مئتين': 200, 'ميتين': 200, 'مئتان': 200,
-        'ثلاثمئة': 300, 'ثلاثمية': 300, 'ثلثمية': 300,
-        'اربعمئة': 400, 'أربعمئة': 400, 'اربعمية': 400,
-        'خمسمئة': 500, 'خمسمية': 500,
-        'ستمئة': 600, 'ستمية': 600,
-        'سبعمئة': 700, 'سبعمية': 700,
-        'ثمانمئة': 800, 'ثمانمية': 800, 'ثمنمية': 800,
-        'تسعمئة': 900, 'تسعمية': 900,
-    };
-
-    const LARGE = {
-        'الف': 1000, 'ألف': 1000, 'آلاف': 1000,
-        'الفين': 2000, 'ألفين': 2000,
-        'مليون': 1000000, 'ملايين': 1000000,
-        'مليار': 1000000000, 'مليارات': 1000000000,
-    };
-
-    const ALL_NUM_WORDS = {};
-    Object.assign(ALL_NUM_WORDS, UNITS, TEENS, TENS, HUNDREDS, LARGE);
-    const SORTED_WORDS = Object.keys(ALL_NUM_WORDS).sort((a, b) => b.length - a.length);
-
-    const NUM_WORD_PATTERN = SORTED_WORDS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    const NUM_SEQUENCE_REGEX = new RegExp(
-        `(?:(?:${NUM_WORD_PATTERN})(?:\\s+و?\\s*|\\s*و\\s*))+(?:${NUM_WORD_PATTERN})`
-        + `|(?:${NUM_WORD_PATTERN})`,
-        'g'
-    );
-
-    function parseArabicNumber(sequence) {
-        const tokens = [];
-        let remaining = sequence.trim();
-        while (remaining.length > 0) {
-            remaining = remaining.replace(/^[\s,و]+/, '');
-            if (!remaining) break;
-            let matched = false;
-            for (const word of SORTED_WORDS) {
-                if (remaining.startsWith(word)) {
-                    const after = remaining.substring(word.length);
-                    if (after.length === 0 || /^[\s,و]/.test(after)) {
-                        tokens.push(ALL_NUM_WORDS[word]);
-                        remaining = after;
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if (!matched) break;
+    function getLangModule(langCode) {
+        for (const mod of Object.values(modules)) {
+            if (mod.match && mod.match(langCode)) return mod;
         }
-        if (tokens.length === 0) return null;
-        let result = 0, current = 0;
-        for (const val of tokens) {
-            if (val >= 1000) {
-                if (current === 0) current = 1;
-                result += current * val;
-                current = 0;
-            } else if (val >= 100) {
-                if (current > 0 && current < 10) current *= val;
-                else current += val;
+        return null;
+    }
+
+    /* ═══════════════════════════════════════════
+       Levenshtein + Fuzzy Matching (shared)
+       ═══════════════════════════════════════════ */
+
+    function levenshtein(a, b) {
+        const m = a.length, n = b.length;
+        if (m === 0) return n;
+        if (n === 0) return m;
+        let prev = Array.from({ length: n + 1 }, (_, i) => i);
+        let curr = new Array(n + 1);
+        for (let i = 1; i <= m; i++) {
+            curr[0] = i;
+            for (let j = 1; j <= n; j++) {
+                curr[j] = a[i - 1] === b[j - 1]
+                    ? prev[j - 1]
+                    : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+            }
+            [prev, curr] = [curr, prev];
+        }
+        return prev[n];
+    }
+
+    function fuzzySimilarity(input, target, mod) {
+        const a = mod?.soundex ? mod.soundex(input) : input;
+        const b = mod?.soundex ? mod.soundex(target) : target;
+        const dist = levenshtein(a, b);
+        return 1 - dist / Math.max(a.length, b.length, 1);
+    }
+
+    const FUZZY_THRESHOLD = 0.75;
+
+    /* ═══════════════════════════════════════════
+       Voice Command Processing
+       ═══════════════════════════════════════════ */
+
+    // Build command maps from all loaded language modules
+    let CMD_ACTIONS = {};
+    let PUNCTUATION = {};
+    let CMD_KEYS = [];
+    let PUNCT_KEYS = [];
+    let PUNCT_REGEX = null;
+    let _activeMod = null;
+
+    function buildCommandMaps(langCode) {
+        const mod = getLangModule(langCode);
+        _activeMod = mod;
+        CMD_ACTIONS = {};
+        PUNCTUATION = {};
+
+        const normalize = mod?.normalize || (t => t);
+        const cmds = mod?.voiceCommands || {};
+
+        for (const [rawKey, val] of Object.entries(cmds)) {
+            const normKey = normalize(rawKey).toLowerCase();
+            if (typeof val === 'string' && val.startsWith('__CMD:')) {
+                CMD_ACTIONS[normKey] = val;
             } else {
-                current += val;
+                PUNCTUATION[normKey] = val;
             }
         }
-        result += current;
-        return result;
+
+        CMD_KEYS = Object.keys(CMD_ACTIONS).sort((a, b) => b.length - a.length);
+        PUNCT_KEYS = Object.keys(PUNCTUATION).sort((a, b) => b.length - a.length);
+        PUNCT_REGEX = PUNCT_KEYS.length > 0
+            ? new RegExp('\\s*(' + PUNCT_KEYS.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\s*', 'gi')
+            : null;
     }
 
-    // Pre-compiled regex patterns for postProcess
-    const BAL = 'ب[اـ]?ل\\s*';
-    const RE_TENTH = new RegExp(`(${NUM_WORD_PATTERN})\\s+${BAL}عشر[ةه]?`, 'g');
-    const RE_PERCENT_W = new RegExp(`(${NUM_WORD_PATTERN})\\s+${BAL}م[ئي][ةه]`, 'g');
-    const RE_THOUSAND_W = new RegExp(`(${NUM_WORD_PATTERN})\\s+${BAL}[اأآ]لف`, 'g');
-    const RE_MILLION_W = new RegExp(`(${NUM_WORD_PATTERN})\\s+${BAL}مليون`, 'g');
-    const RE_DECIMAL_W = new RegExp(`(${NUM_WORD_PATTERN})\\s+فاصل[ةه]?\\s+(${NUM_WORD_PATTERN})`, 'g');
-    const RE_DECIMAL_D = /(\d+)\s*فاصل[ةه]?\s*(\d+)/g;
-    const RE_DOT_D = /(\d+)\s*نقط[ةه]\s*(\d+)/g;
-    const RE_PERCENT_D = /(\d+)\s+بالم[ئي][ةه]/g;
-    const RE_TENTH_D = /(\d+)\s+بال\s*عشر[ةه]?/g;
-    const RE_THOUSAND_D = /(\d+)\s+بال\s*[اأآ]لف/g;
-    const RE_MILLION_D = /(\d+)\s+بال\s*مليون/g;
-
-    // ISSUE-16: Arabic character test for early-exit optimization
-    const HAS_ARABIC_RE = /[\u0600-\u06FF]/;
-    const HAS_DIGIT_RE = /\d/;
-
-    function postProcess(text) {
-        if (!text) return text;
-
-        // ISSUE-16: Skip Arabic number processing if text is pure non-Arabic
-        if (HAS_ARABIC_RE.test(text)) {
-            text = text.replace(RE_TENTH, (m, w) => {
-                const n = parseArabicNumber(w); return n !== null ? (n / 10).toString() : m;
-            });
-            text = text.replace(RE_PERCENT_W, (m, w) => {
-                const n = parseArabicNumber(w); return n !== null ? n + '%' : m;
-            });
-            text = text.replace(RE_THOUSAND_W, (m, w) => {
-                const n = parseArabicNumber(w); return n !== null ? (n / 1000).toString() : m;
-            });
-            text = text.replace(RE_MILLION_W, (m, w) => {
-                const n = parseArabicNumber(w); return n !== null ? (n / 1000000).toString() : m;
-            });
-            text = text.replace(RE_DECIMAL_W, (m, a, b) => {
-                const na = parseArabicNumber(a), nb = parseArabicNumber(b);
-                return (na !== null && nb !== null) ? `${na}.${nb}` : m;
-            });
-
-            text = text.replace(NUM_SEQUENCE_REGEX, (match) => {
-                const num = parseArabicNumber(match);
-                return num !== null ? num.toString() : match;
-            });
-        }
-
-        // ISSUE-16: Skip digit-based replacements if no digits present
-        if (HAS_DIGIT_RE.test(text)) {
-            text = text.replace(RE_DECIMAL_D, '$1.$2');
-            text = text.replace(RE_DOT_D, '$1.$2');
-            text = text.replace(RE_PERCENT_D, '$1%');
-            text = text.replace(RE_TENTH_D, (m, n) => (parseInt(n) / 10).toString());
-            text = text.replace(RE_THOUSAND_D, (m, n) => (parseInt(n) / 1000).toString());
-            text = text.replace(RE_MILLION_D, (m, n) => (parseInt(n) / 1000000).toString());
-        }
-
-        return text;
-    }
-
-    /* ───── Voice Commands (ROAD-07) ───── */
-
-    const VOICE_COMMANDS = {
-        // Arabic
-        'سطر جديد': '\n', 'سطر': '\n', 'انتر': '\n',
-        'فاصلة': '،', 'فارزة': '،',
-        'نقطة': '.', 'نقطه': '.',
-        'علامة استفهام': '؟', 'سؤال': '؟',
-        'علامة تعجب': '!',
-        'نقطتين': ':',
-        'مسح الكل': '__CMD:clear',
-        'تراجع': '__CMD:undo',
-        'امسح': '__CMD:delete',
-        // English
-        'new line': '\n', 'next line': '\n', 'enter': '\n',
-        'comma': ',',
-        'period': '.', 'full stop': '.', 'dot': '.',
-        'question mark': '?',
-        'exclamation mark': '!', 'exclamation point': '!',
-        'colon': ':',
-        'semicolon': ';',
-        'clear all': '__CMD:clear',
-        'undo': '__CMD:undo', 'undo that': '__CMD:undo',
-        'delete': '__CMD:delete', 'delete that': '__CMD:delete',
-    };
-
-    // Separate CMD commands (exact-match only) from punctuation (inline replace)
-    const CMD_ACTIONS = {};
-    const PUNCTUATION = {};
-    for (const [key, val] of Object.entries(VOICE_COMMANDS)) {
-        if (typeof val === 'string' && val.startsWith('__CMD:')) {
-            CMD_ACTIONS[key] = val;
-        } else {
-            PUNCTUATION[key] = val;
-        }
-    }
-    const CMD_KEYS = Object.keys(CMD_ACTIONS).sort((a, b) => b.length - a.length);
-    const PUNCT_KEYS = Object.keys(PUNCTUATION).sort((a, b) => b.length - a.length);
-    const PUNCT_REGEX = new RegExp(
-        '\\s*(' + PUNCT_KEYS.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\s*',
-        'gi'
-    );
+    // Initialize with default language
+    buildCommandMaps(currentLang);
 
     function processVoiceCommands(text) {
         if (!text) return text;
-        const trimmed = text.trim();
+        const mod = _activeMod;
+        const normalize = mod?.normalize || (t => t);
+        const trimmed = normalize(text.trim());
         const lower = trimmed.toLowerCase();
 
-        // 1. Exact match for __CMD commands (clear, undo, delete)
+        // 1. Exact match
         for (const cmd of CMD_KEYS) {
             if (lower === cmd) return CMD_ACTIONS[cmd];
         }
 
-        // 2. Inline replace punctuation commands within text
-        const replaced = trimmed.replace(PUNCT_REGEX, (match) => {
-            const key = match.trim().toLowerCase();
-            return PUNCTUATION[key] || match;
-        });
+        // 2. Fuzzy match (using language-specific soundex if available)
+        let bestScore = 0, bestCmd = null;
+        for (const cmd of CMD_KEYS) {
+            const sim = fuzzySimilarity(lower, cmd, mod);
+            if (sim > bestScore && sim >= FUZZY_THRESHOLD) {
+                bestScore = sim;
+                bestCmd = cmd;
+            }
+        }
+        if (bestCmd) return CMD_ACTIONS[bestCmd];
 
-        return replaced;
+        // 3. Inline replace punctuation
+        if (PUNCT_REGEX) {
+            const replaced = trimmed.replace(PUNCT_REGEX, (match) => {
+                const key = match.trim().toLowerCase();
+                return PUNCTUATION[key] || match;
+            });
+            return replaced;
+        }
+
+        return trimmed;
     }
 
-    /* ───── Command Handler ───── */
+    function postProcess(text) {
+        if (!text) return text;
+        const mod = _activeMod;
+        return mod?.postProcess ? mod.postProcess(text) : text;
+    }
+
+    /* ═══════════════════════════════════════════
+       Command Handler
+       ═══════════════════════════════════════════ */
 
     function handleCommand(e) {
         const { command, lang } = e.detail;
@@ -245,6 +151,7 @@
             shouldBeRunning = true;
             restartCount = 0;
             currentLang = lang || 'ar-IQ';
+            buildCommandMaps(currentLang);
             startRecognition(currentLang);
 
         } else if (command === 'stop') {
@@ -255,6 +162,7 @@
             const langCfg = window.VOSK_LANG_CONFIG;
             currentLang = langCfg ? langCfg.getNextLang(currentLang)
                 : (currentLang.startsWith('ar') ? 'en-US' : 'ar-IQ');
+            buildCommandMaps(currentLang);
             emit('langChanged', { lang: currentLang });
             if (shouldBeRunning) {
                 restartCount = 0;
@@ -266,13 +174,38 @@
 
     document.addEventListener('vosk-stt-command', handleCommand);
 
-    /* ───── Recognition ───── */
-
     function emit(type, data) {
         document.dispatchEvent(new CustomEvent('vosk-stt-event', {
             detail: { type, ...data }
         }));
     }
+
+    /* ═══════════════════════════════════════════
+       Recognition Engine
+       ═══════════════════════════════════════════ */
+
+    function pickBestAlternative(result, lang) {
+        let best = result[0];
+        let bestScore = scoreAlt(best, lang);
+        for (let a = 1; a < result.length; a++) {
+            const s = scoreAlt(result[a], lang);
+            if (s > bestScore) { best = result[a]; bestScore = s; }
+        }
+        return best;
+    }
+
+    function scoreAlt(alt, lang) {
+        let score = alt.confidence || 0.5;
+        const t = alt.transcript || '';
+        if (t.trim().length < 2) score -= 0.3;
+        if (lang.startsWith('ar')) {
+            const arChars = (t.match(/[\u0600-\u06FF]/g) || []).length;
+            score += (arChars / Math.max(t.length, 1)) * 0.15;
+        }
+        return score;
+    }
+
+    const MIN_CONFIDENCE = 0.3;
 
     function startRecognition(lang) {
         if (!shouldBeRunning) return;
@@ -286,11 +219,11 @@
         recognition.lang = lang;
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
+        recognition.maxAlternatives = 3;
 
         let emittedLength = 0;
         let lastInterim = '';
-        let interimTimeout = null;
+        let shortPauseTimer = null;
         const myGeneration = stopGeneration;
 
         recognition.onstart = () => emit('started', {});
@@ -298,59 +231,55 @@
         recognition.onspeechstart = () => emit('speechstart', {});
 
         recognition.onresult = (event) => {
-            clearTimeout(interimTimeout);
+            clearTimeout(shortPauseTimer);
 
             let allFinal = '';
             let interim = '';
 
             for (let i = 0; i < event.results.length; i++) {
                 if (event.results[i].isFinal) {
-                    allFinal += event.results[i][0].transcript;
+                    const best = pickBestAlternative(event.results[i], lang);
+                    if ((best.confidence || 1) < MIN_CONFIDENCE) {
+                        emit('result', { final: '', interim: `⚠️ ${best.transcript}`, preview: '' });
+                        continue;
+                    }
+                    allFinal += best.transcript;
                 } else {
-                    interim += event.results[i][0].transcript;
+                    const best = pickBestAlternative(event.results[i], lang);
+                    interim += best.transcript;
                 }
             }
 
-            const rawDelta = allFinal.substring(emittedLength).trim();
-
-            // BUGFIX: Rescue dropped phonetic text or non-Arabic words (bypassing strict checks)
-            let effectiveDelta = rawDelta;
-            if (lastInterim && !interim && !rawDelta) {
-                effectiveDelta = lastInterim.trim();
-            }
-            lastInterim = interim;
-
-            const cmdResult = effectiveDelta ? processVoiceCommands(effectiveDelta) : null;
-
-            if (cmdResult && cmdResult.startsWith('__CMD:')) {
-                emit('voiceCommand', { command: cmdResult.substring(6) });
-            } else {
-                // Always run postProcess for Arabic numbers, even after punctuation replacement
-                const processed = effectiveDelta ? postProcess(cmdResult || effectiveDelta) : '';
-
-                emit('result', {
-                    final: processed,
-                    interim: interim,
-                    preview: ''
-                });
-            }
+            const rawDelta = allFinal.substring(Math.min(emittedLength, allFinal.length)).trim();
 
             if (rawDelta) {
+                lastInterim = '';
                 emittedLength = allFinal.length;
+                restartCount = 0; // successful result — reset restart budget
+
+                const cmdResult = processVoiceCommands(rawDelta);
+                if (cmdResult && cmdResult.startsWith('__CMD:')) {
+                    emit('voiceCommand', { command: cmdResult.substring(6) });
+                } else {
+                    const processed = postProcess(cmdResult || rawDelta);
+                    emit('result', { final: processed, interim: interim, preview: '' });
+                }
+            } else {
+                lastInterim = interim;
+                emit('result', { final: '', interim: interim, preview: '' });
             }
 
-            // Force acceptance of phonetic / foreign words if the engine hesitates too long
             if (interim.trim() && shouldBeRunning) {
-                interimTimeout = setTimeout(() => {
+                shortPauseTimer = setTimeout(() => {
                     if (recognition && shouldBeRunning) {
                         try { recognition.stop(); } catch (_err) { }
                     }
-                }, 1200);
+                }, 1500);
             }
         };
 
         recognition.onerror = (event) => {
-            clearTimeout(interimTimeout);
+            clearTimeout(shortPauseTimer);
             if (event.error === 'no-speech' || event.error === 'aborted') return;
             emit('error', { error: event.error });
             if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error)) {
@@ -359,18 +288,17 @@
         };
 
         recognition.onend = () => {
-            clearTimeout(interimTimeout);
+            clearTimeout(shortPauseTimer);
 
-            // Rescue any lingering interim before restart logic
-            if (lastInterim.trim() && myGeneration === stopGeneration && shouldBeRunning) {
-                const effectiveDelta = lastInterim.trim();
-                const cmdResult = processVoiceCommands(effectiveDelta);
+            const pendingInterim = lastInterim.trim();
+            lastInterim = '';
+            if (pendingInterim && myGeneration === stopGeneration && shouldBeRunning) {
+                const cmdResult = processVoiceCommands(pendingInterim);
                 if (cmdResult && cmdResult.startsWith('__CMD:')) {
                     emit('voiceCommand', { command: cmdResult.substring(6) });
                 } else {
-                    emit('result', { final: postProcess(cmdResult || effectiveDelta), interim: '', preview: '' });
+                    emit('result', { final: postProcess(cmdResult || pendingInterim), interim: '', preview: '' });
                 }
-                lastInterim = '';
             }
 
             recognition = null;
@@ -397,6 +325,8 @@
         catch (_err) { emit('error', { error: 'start-failed', message: _err.message }); }
     }
 
+    /* ═══════════════════════════════════════════ */
+
     function stopRecognition() {
         shouldBeRunning = false;
         stopGeneration++;
@@ -407,7 +337,6 @@
         emit('stopped', {});
     }
 
-    // Register cleanup for re-injection
     window.__voskSttCleanup = () => {
         stopRecognition();
         document.removeEventListener('vosk-stt-command', handleCommand);

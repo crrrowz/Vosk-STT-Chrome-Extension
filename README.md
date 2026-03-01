@@ -26,7 +26,9 @@
 | 🗣️ **Voice Commands** | Say "new line", "period", "comma", "نقطة", "سطر جديد" to format text |
 | ↩️ **Editing Commands** | Say "delete", "undo" or "امسح" to remove last word; "clear" to empty field |
 | 🌐 **Arabic + English** | Iraqi Arabic, Standard Arabic, English, and Mixed mode |
-| 🔢 **Smart Numbers** | Speaks "ألف تسعمئة واثنين وثمانين" → writes `1982` |
+| 🤖 **Smart Context** | Numbers only format when surrounded by related words ("ست ساعات" → `6 ساعات`, but "ست" alone stays text) |
+| 🔢 **Number Formatting** | Always-on, compositional Arabic parser (units to billions, fractions, percentages) |
+| 🧩 **Modular Languages** | Drop-in `lang/*.js` NLP modules for phonetic fuzzy matching and commands |
 | 🎯 **Input Picker** | Click to select exactly which field receives text |
 | ⌨️ **Keyboard Shortcuts** | Global `Alt+S`, `Alt+L`, `Alt+P` via Chrome Commands |
 | 🔒 **Privacy First** | Uses Chrome's built-in Web Speech API — audio never leaves your browser |
@@ -59,9 +61,9 @@ git clone https://github.com/crrrowz/Vosk-STT-Chrome-Extension.git
 |---------|-------------|
 | **Language Chips** | Switch between عربي / EN |
 | **⚡ Quick Switch** | Enable split FAB for instant language toggle |
+| **⏱️ Insert Delay** | Buffer speech and insert all at once after a pause (slider) |
 | **🎤 Auto-show Mic** | Toggle whether FAB auto-appears on page load |
-| **🎤 Show/Hide Mic** | Manually show or hide the FAB |
-| **🎯 Pick Input Field** | Select exactly which field receives text |
+| **🎯 Pick Input** | Select exactly which field receives text |
 
 ### Keyboard Shortcuts
 
@@ -110,8 +112,12 @@ Vosk-STT-Chrome-Extension/
 │   └── popup.js               # Popup logic (settings, toggles)
 ├── scripts/
 │   ├── background.js          # Service Worker (chrome.commands routing)
-│   ├── content.js             # Content script (FAB, overlay, picker, DOM)
-│   └── speech-engine.js       # Speech recognition & voice commands (main world)
+│   ├── content.js             # Content script (injects chain, FAB, DOM)
+│   ├── languages.js           # Basic language definitions config
+│   ├── speech-engine.js       # Core STT engine (language-agnostic)
+│   └── lang/                  # Extensible NLP Modules
+│       ├── ar.js              # Arabic: numbers, Soundex, commands
+│       └── en.js              # English: commands
 ├── styles/
 │   └── content.css            # FAB & overlay styling
 ├── icons/                     # Extension icons (16, 48, 128)

@@ -64,6 +64,7 @@
         {
             "resources": [
                 "scripts/languages.js",
+                "scripts/lang/*.js",
                 "scripts/speech-engine.js"
             ],
             "matches": [

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-03-02
+
+### Major Architectural Rewrite
+- 🧩 **Modular NLP Engine** — The monolithic speech engine was split into a language-agnostic core (`speech-engine.js`) and extensible language modules (`scripts/lang/*.js`).
+- ⚡ **Dynamic Module Loading** — Language modules are auto-discovered and injected dynamically based on the active language list. No manifest tweaks needed to add new languages.
+- 🧠 **Smart Context Scorer** — Arabic number formatting now uses a sliding window context scorer. Words like "ست" (six) only convert to `6` if surrounded by time/measurement units, preventing narrative text mangling.
+- ⏱️ **Flawless Insert Buffering** — The "Insert Delay" feature was rewritten to properly accumulate interim results and only flush after *complete* silence, fixing the disjointed insertion bugs.
+- 🔄 **Always-On Intelligence** — Both Number Formatting and AI Formatting are now deeply integrated and always-on. Removed brittle popup toggles. AI (Gemini Nano) silently falls back to rule-based processing if unsupported.
+
+### Fixed
+- 🐛 **Overlay Glitch** — Fixed bug where the overlay would disappear mid-speech due to the engine exhausting its internal restart budget (capped at 50). The budget now correctly resets upon successful transcription.
+- 🐛 **Double Insertion** — Fixed race condition where interim results could double-trigger insertion right as the engine naturally paused.
+- 🐛 **Taa Marbuta & Ha Bugs** — Normalized Arabic trailing characters so voice commands work regardless of how Google STT spells them (ة vs ه).
+
+---
+
 ## [1.2.0] - 2026-02-28
 
 ### Added
