@@ -287,7 +287,7 @@
             }
         };
 
-        recognition.onend = () => {
+        recognition.onend = async () => {
             clearTimeout(shortPauseTimer);
 
             const pendingInterim = lastInterim.trim();
@@ -297,7 +297,18 @@
                 if (cmdResult && cmdResult.startsWith('__CMD:')) {
                     emit('voiceCommand', { command: cmdResult.substring(6) });
                 } else {
-                    emit('result', { final: postProcess(cmdResult || pendingInterim), interim: '', preview: '' });
+                    let finalRaw = postProcess(cmdResult || pendingInterim);
+
+                    // Route through AI AIProcessor if available
+                    if (aiProcessor.available) {
+                        try {
+                            finalRaw = await aiProcessor.process(finalRaw, currentLang);
+                        } catch (e) {
+                            console.error('AI Processing failed, falling back to raw', e);
+                        }
+                    }
+
+                    emit('result', { final: finalRaw, interim: '', preview: '' });
                 }
             }
 
@@ -324,6 +335,72 @@
         try { recognition.start(); }
         catch (_err) { emit('error', { error: 'start-failed', message: _err.message }); }
     }
+
+    /* ═══════════════════════════════════════════
+       AI Post-Processor (Gemini Nano)
+       ═══════════════════════════════════════════ */
+
+    const aiProcessor = {
+        session: null,
+        available: false,
+        initializing: false,
+        lastContext: '',
+
+        async init() {
+            if (this.initializing || this.available) return;
+            this.initializing = true;
+            try {
+                const ai = window.ai || self.ai;
+                if (!ai?.languageModel) return;
+                const caps = await ai.languageModel.capabilities();
+                if (caps.available === 'no') return;
+
+                this.session = await ai.languageModel.create({
+                    systemPrompt: [
+                        'You are an expert STT Post-Processor.',
+                        'Task: Add punctuation, fix spelling, and convert spelled-out numbers to digits.',
+                        'STRICT RULES:',
+                        '- Do NOT change, add, or remove non-number words. Keep the meaning exactly the same.',
+                        '- Do NOT translate. Keep the SAME language as the input.',
+                        '- Convert written numbers to digits (e.g., "مئة وخمسين" -> "150").',
+                        '- Context matters: "الف" in "الفسحة" is part of a word, do NOT convert it to 1000.',
+                        '- Output ONLY the corrected text, nothing else.',
+                        '- Use correct punctuation for the input language (Arabic: ، ؟ ؛)',
+                    ].join('\n'),
+                });
+                this.available = true;
+            } catch (_err) {
+                // Not supported
+            } finally {
+                this.initializing = false;
+            }
+        },
+
+        async process(text, langCode) {
+            if (!this.available || !text.trim()) return text;
+            try {
+                const prompt = this.lastContext
+                    ? `[Lang:${langCode}] Context: "${this.lastContext}"\nText: ${text}`
+                    : `[Lang:${langCode}] ${text}`;
+                const result = await this.session.prompt(prompt);
+                let cleaned = (result || '').trim()
+                    .replace(/^\[Lang:.*?\]\s*/g, '')
+                    .replace(/^(Context|Text|Input|Output):\s*/gi, '')
+                    .replace(/^"|"$/g, ''); // strip surrounding quotes if AI adds them
+                if (!cleaned) return text;
+                this.lastContext = cleaned.slice(-80);
+                return cleaned;
+            } catch (_err) {
+                this.available = false;
+                this.session = null;
+                this.init();
+                return text;
+            }
+        },
+    };
+
+    // Always init AI on engine load
+    aiProcessor.init();
 
     /* ═══════════════════════════════════════════ */
 
