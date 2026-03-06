@@ -402,6 +402,12 @@ body {
   box-shadow: 0 0 8px rgba(108, 60, 225, 0.15);
 }
 
+.engine-btn[data-mode="auto"].active {
+  background: rgba(240, 180, 48, 0.15);
+  color: #f0b430;
+  box-shadow: 0 0 8px rgba(240, 180, 48, 0.12);
+}
+
 .engine-btn[data-mode="offline"].active {
   background: rgba(78, 207, 122, 0.15);
   color: #4ecf7a;
@@ -437,33 +443,7 @@ body {
   font-weight: 600;
 }
 
-.model-url-row {
-  margin-bottom: 6px;
-}
 
-.model-url-input,
-.server-url-input {
-  width: 100%;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid rgba(108, 60, 225, 0.2);
-  background: #161625;
-  color: #e4e4f0;
-  font-size: 10px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.model-url-input:focus,
-.server-url-input:focus {
-  border-color: #6C3CE1;
-}
-
-.model-url-input::placeholder,
-.server-url-input::placeholder {
-  color: #4a4a60;
-}
 
 .model-actions {
   display: flex;
@@ -504,29 +484,4 @@ body {
 
 .model-link:hover {
   color: #7aafff;
-}
-
-.model-presets {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.preset-chip {
-  padding: 3px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(108, 60, 225, 0.15);
-  background: rgba(108, 60, 225, 0.05);
-  color: #8a8aa0;
-  font-size: 10px;
-  font-family: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.preset-chip:hover {
-  background: rgba(108, 60, 225, 0.12);
-  border-color: rgba(108, 60, 225, 0.3);
-  color: #c0c0d8;
 }

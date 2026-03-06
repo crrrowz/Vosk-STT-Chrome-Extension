@@ -19,12 +19,16 @@ All notable changes to this project will be documented in this file.
 - 🐛 **Stacked Event Listener** — `vosk-server-msg` handler now removed on re-inject, preventing duplicate results.
 - 🐛 **False Reconnect on Stop** — Intentional WebSocket close no longer triggers reconnect attempts.
 - 🐛 **`onend` Flush Bypass** — Pending interim results in online mode now respect `autoGate` in Auto mode.
+- 🐛 **`restartCount` Crash** — Unrenamed variable crashed `handleCommand`, breaking all engine modes.
+- 🌐 **English-Only UI Labels** — Replaced hardcoded Arabic `بطيء`/`لا اتصال` with `Slow`/`No Connection`.
 
 ### Changed
 - 🏗️ **Removed WASM/Offscreen** — Deleted `offscreen/`, `popup/zip-to-targz.js`, `tools/convert_model.py`.
 - 📋 **Manifest Cleanup** — Removed `offscreen` permission, sandbox, `wasm-unsafe-eval`.
 - 🎨 **Popup UI** — Server status auto-detected on open. Removed manual URL input and Connect button.
 - ⚡ **Separate Restart Counters** — Online and Local engines use independent restart budgets in Auto mode.
+- 🎨 **Auto Button Color** — Unique amber color for Auto engine mode (Online=purple, Auto=amber, Local=green).
+- 🧹 **CSS Cleanup** — Removed dead `.model-url-*`, `.preset-chip` styles. Logical CSS properties for RTL support.
 
 ---
 
