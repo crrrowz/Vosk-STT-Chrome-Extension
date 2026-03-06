@@ -11,7 +11,13 @@
 <body>
   <div class="container">
     <div class="header">
-      <div class="logo-icon">🎙️</div>
+      <div class="logo-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <path d="M12 1a4 4 0 0 0-4 4v7a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="23" />
+          <line x1="8" y1="23" x2="16" y2="23" />
+        </svg></div>
       <div>
         <h1>Vosk STT</h1>
         <p class="subtitle">Voice → Text</p>
@@ -23,14 +29,39 @@
 
     <!-- Actions -->
     <div class="actions">
-      <button id="toggleBtn" class="main-btn">🎤 Show Mic Button</button>
-      <button id="pickBtn" class="pick-btn">🎯 Pick Input Field</button>
+      <button id="toggleBtn" class="main-btn">Show Mic Button</button>
+      <button id="pickBtn" class="pick-btn">Pick Input Field</button>
     </div>
 
     <!-- Settings group -->
     <div class="settings-group">
+
+      <!-- Engine Mode Toggle -->
+      <div class="engine-mode-row">
+        <span class="engine-label">Engine</span>
+        <div class="engine-toggle" id="engineToggle">
+          <button class="engine-btn active" data-mode="online">Online</button>
+          <button class="engine-btn" data-mode="offline">Offline</button>
+        </div>
+      </div>
+
+      <!-- Offline Model Config (shown only when offline) -->
+      <div class="model-config hidden" id="modelConfig">
+        <div class="model-info">
+          <span class="model-label">Vosk Model</span>
+          <span class="model-status" id="modelStatus">No model</span>
+        </div>
+        <div class="model-actions">
+          <label class="model-btn" id="modelFileLabel">
+            Choose Model File
+            <input type="file" id="modelFileInput" accept=".zip,.rar,.gz,.tgz,.tar.gz,.tar" hidden>
+          </label>
+          <a href="https://alphacephei.com/vosk/models" target="_blank" class="model-link">Download Models</a>
+        </div>
+      </div>
+
       <div class="toggle-row">
-        <label class="toggle-label" for="splitToggle">⚡ Quick Switch</label>
+        <label class="toggle-label" for="splitToggle">Quick Switch</label>
         <label class="switch">
           <input type="checkbox" id="splitToggle">
           <span class="slider"></span>
@@ -47,7 +78,7 @@
       </div>
 
       <div class="toggle-row">
-        <label class="toggle-label" for="autoShowToggle">🎤 Auto-show Mic</label>
+        <label class="toggle-label" for="autoShowToggle">Auto-show Mic</label>
         <label class="switch">
           <input type="checkbox" id="autoShowToggle" checked>
           <span class="slider"></span>
@@ -57,7 +88,7 @@
 
       <div class="delay-row">
         <div class="delay-header">
-          <label class="delay-label">⏱️ Insert Delay</label>
+          <label class="delay-label">Insert Delay</label>
           <span id="delayValue" class="delay-value">0s</span>
         </div>
         <input type="range" id="insertDelay" min="0" max="5000" step="250" value="0" class="delay-slider">

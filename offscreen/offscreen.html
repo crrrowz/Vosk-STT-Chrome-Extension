@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+</head>
+
+<body>
+  <!-- Offscreen document for Vosk WASM speech recognition -->
+  <!-- Vosklet runs inside sandboxed iframe (sandbox.html) for unsafe-eval -->
+  <!-- This page handles Chrome APIs and mic capture -->
+  <iframe id="sandbox" src="sandbox.html" style="display:none"></iframe>
+  <script src="offscreen.js"></script>
+</body>
+
+</html>

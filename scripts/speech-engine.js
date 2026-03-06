@@ -13,7 +13,26 @@
     let currentLang = 'ar-IQ';
     let restartCount = 0;
     let stopGeneration = 0;
-    const MAX_RESTARTS = 50;
+    const MAX_RESTARTS = 200;
+    let lastActivityTime = 0;
+    let watchdogTimer = null;
+    const WATCHDOG_INTERVAL = 8000; // 8s — if no activity, force restart
+
+    /* ═══════════════════════════════════════════
+       Connection Health Tracker
+       ═══════════════════════════════════════════ */
+
+    let connStatus = 'offline';   // 'connecting' | 'online' | 'slow' | 'offline'
+    let recognitionStartTime = 0; // for latency measurement
+    let firstResultReceived = false;
+    let networkErrorCount = 0;
+    const SLOW_THRESHOLD = 3000;  // ms — first result > 3s = slow
+
+    function setConnStatus(status) {
+        if (status === connStatus) return;
+        connStatus = status;
+        emit('connectionStatus', { status });
+    }
 
     /* ═══════════════════════════════════════════
        Language Module Registry
@@ -215,6 +234,11 @@
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) { emit('error', { error: 'unsupported' }); return; }
 
+        // Connection health: mark as connecting
+        recognitionStartTime = Date.now();
+        firstResultReceived = false;
+        setConnStatus('connecting');
+
         recognition = new SR();
         recognition.lang = lang;
         recognition.continuous = true;
@@ -226,12 +250,55 @@
         let shortPauseTimer = null;
         const myGeneration = stopGeneration;
 
+        // Start liveness watchdog
+        lastActivityTime = Date.now();
+        clearInterval(watchdogTimer);
+        watchdogTimer = setInterval(() => {
+            if (!shouldBeRunning || myGeneration !== stopGeneration) {
+                clearInterval(watchdogTimer);
+                watchdogTimer = null;
+                return;
+            }
+            const silentMs = Date.now() - lastActivityTime;
+            // Connection health: progressive degradation
+            if (silentMs > WATCHDOG_INTERVAL * 2) {
+                setConnStatus('offline');
+            } else if (silentMs > WATCHDOG_INTERVAL) {
+                setConnStatus('slow');
+            }
+            if (silentMs > WATCHDOG_INTERVAL && recognition) {
+                console.warn(`[Vosk STT] Watchdog: ${silentMs}ms silent, force-restarting`);
+                try { recognition.abort(); } catch (_e) { }
+                recognition = null;
+                restartCount++;
+                if (restartCount < MAX_RESTARTS) {
+                    setTimeout(() => {
+                        if (shouldBeRunning && myGeneration === stopGeneration) {
+                            startRecognition(currentLang);
+                        }
+                    }, 300);
+                }
+            }
+        }, WATCHDOG_INTERVAL);
+
         recognition.onstart = () => emit('started', {});
         recognition.onaudiostart = () => emit('audiostart', {});
         recognition.onspeechstart = () => emit('speechstart', {});
 
         recognition.onresult = (event) => {
             clearTimeout(shortPauseTimer);
+            lastActivityTime = Date.now();
+
+            // Connection health: first result = measure latency
+            if (!firstResultReceived) {
+                firstResultReceived = true;
+                networkErrorCount = 0;
+                const latency = Date.now() - recognitionStartTime;
+                setConnStatus(latency > SLOW_THRESHOLD ? 'slow' : 'online');
+            } else if (connStatus !== 'online') {
+                // Recovery: results flowing again
+                setConnStatus('online');
+            }
 
             let allFinal = '';
             let interim = '';
@@ -240,7 +307,7 @@
                 if (event.results[i].isFinal) {
                     const best = pickBestAlternative(event.results[i], lang);
                     if ((best.confidence || 1) < MIN_CONFIDENCE) {
-                        emit('result', { final: '', interim: `⚠️ ${best.transcript}`, preview: '' });
+                        emit('result', { final: '', interim: `[low confidence] ${best.transcript}`, preview: '' });
                         continue;
                     }
                     allFinal += best.transcript;
@@ -274,21 +341,30 @@
                     if (recognition && shouldBeRunning) {
                         try { recognition.stop(); } catch (_err) { }
                     }
-                }, 1500);
+                }, 3000);
             }
         };
 
         recognition.onerror = (event) => {
             clearTimeout(shortPauseTimer);
+            lastActivityTime = Date.now();
             if (event.error === 'no-speech' || event.error === 'aborted') return;
+            if (event.error === 'network') {
+                networkErrorCount++;
+                console.warn('[Vosk STT] Network error — will auto-retry');
+                setConnStatus(networkErrorCount >= 3 ? 'offline' : 'slow');
+                return; // let onend handle the restart
+            }
             emit('error', { error: event.error });
             if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error)) {
                 shouldBeRunning = false;
             }
         };
 
-        recognition.onend = async () => {
+        recognition.onend = () => {
             clearTimeout(shortPauseTimer);
+            clearInterval(watchdogTimer);
+            watchdogTimer = null;
 
             const pendingInterim = lastInterim.trim();
             lastInterim = '';
@@ -298,17 +374,16 @@
                     emit('voiceCommand', { command: cmdResult.substring(6) });
                 } else {
                     let finalRaw = postProcess(cmdResult || pendingInterim);
-
-                    // Route through AI AIProcessor if available
-                    if (aiProcessor.available) {
-                        try {
-                            finalRaw = await aiProcessor.process(finalRaw, currentLang);
-                        } catch (e) {
-                            console.error('AI Processing failed, falling back to raw', e);
-                        }
-                    }
-
                     emit('result', { final: finalRaw, interim: '', preview: '' });
+
+                    // Fire-and-forget AI post-processing (non-blocking)
+                    if (aiProcessor.available) {
+                        aiProcessor.process(finalRaw, currentLang).then(corrected => {
+                            if (corrected && corrected !== finalRaw) {
+                                emit('result', { final: '', interim: corrected, preview: '' });
+                            }
+                        }).catch(() => { });
+                    }
                 }
             }
 
@@ -319,15 +394,17 @@
             }
             if (shouldBeRunning && restartCount < MAX_RESTARTS) {
                 restartCount++;
+                const delay = restartCount > 10 ? 500 : 200;
                 setTimeout(() => {
                     if (shouldBeRunning && myGeneration === stopGeneration) {
                         startRecognition(currentLang);
                     }
-                }, 200);
+                }, delay);
             } else if (shouldBeRunning) {
                 shouldBeRunning = false;
                 emit('stopped', {});
             } else {
+                setConnStatus('offline');
                 emit('stopped', {});
             }
         };
@@ -407,6 +484,8 @@
     function stopRecognition() {
         shouldBeRunning = false;
         stopGeneration++;
+        clearInterval(watchdogTimer);
+        watchdogTimer = null;
         if (recognition) {
             try { recognition.abort(); } catch (_err) { }
             recognition = null;

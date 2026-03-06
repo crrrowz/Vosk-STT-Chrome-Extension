@@ -355,3 +355,123 @@
     outline: 2px solid #4F8FFF;
     outline-offset: 3px;
 }
+
+/* ===== Connection Health Indicator ===== */
+
+/* --- Overlay Dot States --- */
+.vosk-stt-dot.vosk-conn-connecting {
+    background: #4F8FFF;
+    animation: vosk-pulse-connecting 0.6s infinite;
+}
+
+.vosk-stt-dot.vosk-conn-online {
+    background: #4ecf7a;
+    animation: vosk-pulse-online 1.8s infinite;
+}
+
+.vosk-stt-dot.vosk-conn-slow {
+    background: #f0a030;
+    animation: vosk-pulse-slow 1s infinite;
+}
+
+.vosk-stt-dot.vosk-conn-offline {
+    background: #6b6b80;
+    animation: none;
+    opacity: 0.6;
+}
+
+@keyframes vosk-pulse-connecting {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(79, 143, 255, 0.5); }
+    50% { opacity: 0.5; box-shadow: 0 0 0 5px rgba(79, 143, 255, 0); }
+}
+
+@keyframes vosk-pulse-online {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(78, 207, 122, 0.4); }
+    50% { opacity: 0.8; box-shadow: 0 0 0 5px rgba(78, 207, 122, 0); }
+}
+
+@keyframes vosk-pulse-slow {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(240, 160, 48, 0.5); }
+    50% { opacity: 0.6; box-shadow: 0 0 0 5px rgba(240, 160, 48, 0); }
+}
+
+/* --- FAB Connection States (recording override) --- */
+#vosk-fab.recording.vosk-conn-slow {
+    background: linear-gradient(135deg, #f0a030, #e8b84d);
+    box-shadow:
+        0 4px 20px rgba(240, 160, 48, 0.5),
+        0 0 0 3px rgba(240, 160, 48, 0.2);
+    animation: vosk-fab-pulse-slow 1.2s infinite;
+}
+
+#vosk-fab.recording.vosk-conn-offline {
+    background: linear-gradient(135deg, #4a4a5e, #5c5c72);
+    box-shadow:
+        0 4px 12px rgba(0, 0, 0, 0.3),
+        0 0 0 3px rgba(100, 100, 120, 0.2);
+    animation: none;
+    opacity: 0.85;
+}
+
+#vosk-fab.recording.vosk-conn-connecting {
+    animation: vosk-fab-pulse-connecting 0.8s infinite;
+}
+
+#vosk-fab.recording.vosk-conn-online {
+    /* default recording gradient — no override needed, just stop the connecting pulse */
+    animation: vosk-fab-pulse 1.8s infinite;
+}
+
+@keyframes vosk-fab-pulse-slow {
+    0%, 100% {
+        box-shadow:
+            0 4px 20px rgba(240, 160, 48, 0.4),
+            0 0 0 3px rgba(240, 160, 48, 0.15);
+    }
+    50% {
+        box-shadow:
+            0 4px 30px rgba(240, 160, 48, 0.6),
+            0 0 0 8px rgba(240, 160, 48, 0.08);
+    }
+}
+
+@keyframes vosk-fab-pulse-connecting {
+    0%, 100% {
+        box-shadow:
+            0 4px 20px rgba(225, 60, 94, 0.4),
+            0 0 0 3px rgba(79, 143, 255, 0.2);
+    }
+    50% {
+        box-shadow:
+            0 4px 30px rgba(225, 60, 94, 0.5),
+            0 0 0 10px rgba(79, 143, 255, 0.05);
+    }
+}
+
+/* --- Split FAB connection states --- */
+#vosk-fab.split.recording.vosk-conn-slow .vosk-fab-half.active-lang {
+    background: rgba(240, 160, 48, 0.45);
+}
+
+#vosk-fab.split.recording.vosk-conn-offline .vosk-fab-half.active-lang {
+    background: rgba(100, 100, 120, 0.35);
+}
+
+/* --- Connection Badge in Overlay --- */
+.vosk-conn-badge {
+    margin-inline-start: auto;
+    font-size: 10px;
+    font-weight: 600;
+    color: #f0a030;
+    white-space: nowrap;
+    direction: rtl;
+}
+
+/* --- FAB language badge adapts to connection state --- */
+#vosk-fab.recording.vosk-conn-slow #vosk-fab-lang {
+    border-color: #f0a030;
+}
+
+#vosk-fab.recording.vosk-conn-offline #vosk-fab-lang {
+    border-color: #6b6b80;
+}

@@ -5,7 +5,7 @@
 }
 
 body {
-  width: 260px;
+  width: 320px;
   font-family: 'Segoe UI', Tahoma, sans-serif;
   background: #0d0d18;
   color: #e4e4f0;
@@ -13,10 +13,10 @@ body {
 }
 
 .container {
-  padding: 16px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 /* ─── Header ─── */
@@ -27,8 +27,14 @@ body {
 }
 
 .logo-icon {
-  font-size: 28px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(108, 60, 225, 0.12);
+  color: #6C3CE1;
 }
 
 .header h1 {
@@ -131,20 +137,20 @@ body {
 
 /* ─── Settings Group ─── */
 .settings-group {
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.04);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
 .toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 0;
+  padding: 7px 0;
 }
 
 .toggle-label {
@@ -347,4 +353,177 @@ body {
 .shortcut-row span {
   font-size: 9px;
   color: #5a5a78;
+}
+
+/* ─── Engine Mode Toggle ─── */
+.engine-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  margin-bottom: 2px;
+}
+
+.engine-label {
+  font-size: 12px;
+  color: #9898b0;
+}
+
+.engine-toggle {
+  display: flex;
+  gap: 2px;
+  background: #161625;
+  border-radius: 8px;
+  padding: 2px;
+  border: 1px solid rgba(108, 60, 225, 0.15);
+}
+
+.engine-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #6a6a8a;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.engine-btn:hover {
+  color: #9898b0;
+}
+
+.engine-btn.active {
+  background: rgba(108, 60, 225, 0.2);
+  color: #a78bfa;
+  box-shadow: 0 0 8px rgba(108, 60, 225, 0.15);
+}
+
+.engine-btn[data-mode="offline"].active {
+  background: rgba(78, 207, 122, 0.15);
+  color: #4ecf7a;
+}
+
+/* ─── Model Config ─── */
+.model-config {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  margin-bottom: 2px;
+  animation: slideIn 0.2s ease;
+}
+
+.model-config.hidden {
+  display: none;
+}
+
+.model-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.model-label {
+  font-size: 11px;
+  color: #9898b0;
+}
+
+.model-status {
+  font-size: 10px;
+  color: #6a6a8a;
+  font-weight: 600;
+}
+
+.model-url-row {
+  margin-bottom: 6px;
+}
+
+.model-url-input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(108, 60, 225, 0.2);
+  background: #161625;
+  color: #e4e4f0;
+  font-size: 10px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.model-url-input:focus {
+  border-color: #6C3CE1;
+}
+
+.model-url-input::placeholder {
+  color: #4a4a60;
+}
+
+.model-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(78, 207, 122, 0.12);
+  color: #4ecf7a;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.model-btn:hover {
+  background: rgba(78, 207, 122, 0.2);
+}
+
+.model-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.model-link {
+  font-size: 10px;
+  color: #4F8FFF;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.2s;
+}
+
+.model-link:hover {
+  color: #7aafff;
+}
+
+.model-presets {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.preset-chip {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(108, 60, 225, 0.15);
+  background: rgba(108, 60, 225, 0.05);
+  color: #8a8aa0;
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preset-chip:hover {
+  background: rgba(108, 60, 225, 0.12);
+  border-color: rgba(108, 60, 225, 0.3);
+  color: #c0c0d8;
 }
