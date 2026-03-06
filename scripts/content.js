@@ -505,8 +505,8 @@
                     const badgeMap = {
                         connecting: '',
                         online: '',
-                        slow: 'بطيء',
-                        offline: 'لا اتصال',
+                        slow: 'Slow',
+                        offline: 'No Connection',
                     };
                     badge.textContent = badgeMap[st] || '';
                     badge.style.display = badgeMap[st] ? '' : 'none';

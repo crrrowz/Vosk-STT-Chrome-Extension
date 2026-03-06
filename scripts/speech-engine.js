@@ -176,7 +176,6 @@
 
         if (command === 'start') {
             shouldBeRunning = true;
-            restartCount = 0;
             currentLang = lang || 'ar-IQ';
             // Store engine config from content.js (has chrome.storage access)
             _engineMode = engineMode || 'online';
@@ -502,7 +501,7 @@
                 setConnStatus('slow');
             }
             if (silentMs > WATCHDOG_INTERVAL && recognition) {
-                console.warn(`[Vosk Engine] Watchdog: ${silentMs}ms silent, force-restarting (restart #${restartCount + 1})`);
+                console.warn(`[Vosk Engine] Watchdog: ${silentMs}ms silent, force-restarting (restart #${onlineRestartCount + 1})`);
                 try { recognition.abort(); } catch (_e) { }
                 recognition = null;
             }
@@ -520,7 +519,7 @@
         };
         recognition.onspeechstart = () => {
             console.log('[Vosk Engine] recognition.onspeechstart fired');
-            restartCount = 0;
+            onlineRestartCount = 0;
             emit('speechstart', {});
         };
 

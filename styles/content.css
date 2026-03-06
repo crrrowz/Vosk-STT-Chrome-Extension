@@ -319,7 +319,7 @@
 }
 
 .vosk-fab-half:first-child {
-    border-right: 1px solid rgba(255, 255, 255, 0.15);
+    border-inline-end: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .vosk-fab-half:hover {
@@ -464,7 +464,6 @@
     font-weight: 600;
     color: #f0a030;
     white-space: nowrap;
-    direction: rtl;
 }
 
 /* --- FAB language badge adapts to connection state --- */
