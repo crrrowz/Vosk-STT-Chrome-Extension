@@ -55,14 +55,13 @@ git clone https://github.com/crrrowz/Vosk-STT-Chrome-Extension.git
 3. Speak — text appears live, then gets inserted
 4. Click the mic again to stop
 
-### Offline Mode (Experimental)
+### Local Server Mode (Offline STT)
 
-1. Switch the STT API to **Offline (Local Vosk)** in the popup.
-2. Click **Load Model**.
-3. Select a valid Vosk model archive (`.zip` or `.tar.gz`).
-    *   *Important:* The archive **must** contain the model files (`am`, `conf`, `graph`, etc.) directly at the root of the zip file. Do not place them inside an outer wrapper folder before zipping.
-4. Wait for the model to load into the extension's IndexedDB.
-5. Click the microphone icon to start recording offline!
+1. Set up the Python server — see [`server/README.md`](server/README.md)
+2. Start the server: `python server/vosk_server.py`
+3. Open extension popup → switch to **Local** mode
+4. Click **Connect** (default: `ws://localhost:8765`)
+5. Click the mic and speak — recognition runs fully offline!
 
 ### Settings (Popup)
 
@@ -123,10 +122,14 @@ Vosk-STT-Chrome-Extension/
 │   ├── background.js          # Service Worker (chrome.commands routing)
 │   ├── content.js             # Content script (injects chain, FAB, DOM)
 │   ├── languages.js           # Basic language definitions config
-│   ├── speech-engine.js       # Core STT engine (language-agnostic)
+│   ├── speech-engine.js       # Core STT engine (online + local WebSocket)
 │   └── lang/                  # Extensible NLP Modules
 │       ├── ar.js              # Arabic: numbers, Soundex, commands
 │       └── en.js              # English: commands
+├── server/
+│   ├── vosk_server.py         # Local Vosk WebSocket server
+│   ├── requirements.txt       # Python dependencies
+│   └── README.md              # Server setup guide
 ├── styles/
 │   └── content.css            # FAB & overlay styling
 ├── icons/                     # Extension icons (16, 48, 128)
@@ -147,9 +150,10 @@ Vosk-STT-Chrome-Extension/
 ```
 
 - **`scripts/background.js`** — Service worker. Listens to global `chrome.commands` and routes actions.
-- **`scripts/speech-engine.js`** — Runs in page's main world (required for mic access). Handles recognition, number parsing, and voice commands.
+- **`scripts/speech-engine.js`** — Runs in page's main world (required for mic access). Handles Web Speech API (online) and WebSocket client (local server mode), voice commands, and connection health monitoring.
 - **`scripts/content.js`** — Runs in Chrome's isolated world. Manages FAB UI, draggable states, text cursor APIs, and overlay updates.
-- **Communication** — `CustomEvent` between content ↔ engine, `chrome.runtime` between background/popup ↔ content.
+- **`server/vosk_server.py`** — Python WebSocket server for offline STT using native Vosk. Auto-discovers models, streams partial/final results.
+- **Communication** — `CustomEvent` between content ↔ engine, `chrome.runtime` between background/popup ↔ content, `WebSocket` between engine ↔ local server.
 
 ### Why Main World Injection?
 
@@ -168,7 +172,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, coding standards, and tes
 - 🧪 Testing on different websites
 - 🔢 Number parsing for other languages
 - 📱 Touch/mobile improvements
-- 🔌 Vosk WASM integration for offline mode
 
 ## 🔮 Roadmap
 
@@ -182,7 +185,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, coding standards, and tes
 - [x] Security audit fixes (XSS, permissions, sanitization)
 - [ ] Options page for deeper customization
 - [ ] Transcription History panel
-- [ ] Offline mode via Vosk WASM
+- [x] Local Vosk server for offline STT
+- [ ] AI Post-Processor via Gemini Nano ([saved code](audit/future-ai-post-processor.md))
 - [ ] Extension modularization (esbuild)
 - [ ] i18n via Chrome's `_locales` system
 - [ ] Firefox / Edge port
@@ -194,5 +198,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, coding standards, and tes
 ## 🙏 Acknowledgments
 
 - [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API)
-- [Vosk](https://alphacephei.com/vosk/) — future offline integration
+- [Vosk](https://alphacephei.com/vosk/) — offline speech recognition engine
 - Chrome [Manifest V3](https://developer.chrome.com/docs/extensions/mv3/)

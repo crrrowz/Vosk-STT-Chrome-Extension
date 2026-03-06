@@ -21,6 +21,7 @@ Thank you for your interest in contributing! 🎉
 ├── manifest.json              # Extension config (Manifest V3)
 ├── popup/                     # Popup UI (HTML, CSS, JS)
 ├── scripts/                   # Core logic (background, content, speech-engine)
+├── server/                    # Local Vosk WebSocket server (Python)
 ├── styles/                    # Content script CSS (FAB, overlay)
 ├── icons/                     # Extension icons
 ├── assets/                    # Screenshots & demo media
@@ -37,11 +38,12 @@ Thank you for your interest in contributing! 🎉
 - Use named catch parameters (`_err`) to avoid variable shadowing
 
 ### Architecture Rules
-- **`scripts/speech-engine.js`** — Only speech recognition logic. Runs in page main world.
-- **`scripts/content.js`** — DOM manipulation, FAB, overlay, messaging. Runs in isolated world.
+- **`scripts/speech-engine.js`** — Speech recognition + mic capture. Runs in page main world.
+- **`scripts/content.js`** — DOM manipulation, FAB, overlay, WebSocket bridge for local server. Runs in isolated world.
 - **`popup/popup.js`** — Popup UI logic only. Keep minimal.
 - **`scripts/background.js`** — Service worker. Global shortcuts and tab management.
-- Communication: `CustomEvent` between content ↔ engine, `chrome.runtime` between background/popup ↔ content.
+- **`server/vosk_server.py`** — Local Vosk WebSocket server. On-demand model loading by language.
+- Communication: `CustomEvent` between content ↔ engine, `chrome.runtime` between background/popup ↔ content, `WebSocket` between content.js ↔ local server.
 
 ### CSS Guidelines
 - All selectors must be prefixed with `vosk-` or `#vosk-`

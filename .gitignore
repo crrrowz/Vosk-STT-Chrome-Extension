@@ -10,3 +10,4 @@ Thumbs.db
 .vscode/
 PowerShellHistory.txt
 /audit
+/server/models/ar/vosk-model-ar-0.22-linto-1.1.0

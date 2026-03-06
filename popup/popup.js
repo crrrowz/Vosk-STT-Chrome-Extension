@@ -23,14 +23,10 @@
                 btn.classList.add('active');
                 selectedLang = lang.code;
                 chrome.storage?.local?.set({ sttLang: selectedLang });
-
-                // Refresh model status for the newly selected language
-                refreshModelStatusFor(selectedLang);
-
                 try {
                     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                     if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setLang', lang: selectedLang });
-                } catch (_err) { console.warn('[Vosk STT] setLang failed', _err); }
+                } catch (_err) { }
             });
             langRow.appendChild(btn);
         });
@@ -68,28 +64,9 @@
     const engineToggle = document.getElementById('engineToggle');
     const modelConfigEl = document.getElementById('modelConfig');
     const modelStatus = document.getElementById('modelStatus');
-    const modelFileInput = document.getElementById('modelFileInput');
+    const serverUrlInput = document.getElementById('serverUrl');
+    const testServerBtn = document.getElementById('testServerBtn');
     let currentEngineMode = 'online';
-
-    // IndexedDB helpers for model storage
-    function openModelDB() {
-        return new Promise((resolve, reject) => {
-            const req = indexedDB.open('vosk-models', 1);
-            req.onupgradeneeded = () => req.result.createObjectStore('models');
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    async function storeModel(name, arrayBuffer) {
-        const db = await openModelDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('models', 'readwrite');
-            tx.objectStore('models').put(arrayBuffer, name);
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-        });
-    }
 
     function setEngineMode(mode) {
         currentEngineMode = mode;
@@ -98,8 +75,10 @@
             btn.classList.toggle('active', btn.dataset.mode === mode);
         });
         if (modelConfigEl) {
-            modelConfigEl.classList.toggle('hidden', mode !== 'offline');
+            modelConfigEl.classList.toggle('hidden', mode === 'online');
         }
+        // Auto-test when switching to offline or auto
+        if (mode !== 'online') testServerConnection();
     }
 
     if (engineToggle) {
@@ -108,65 +87,50 @@
         });
     }
 
-    // File picker for local model
-    if (modelFileInput) {
-        modelFileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+    // ─── Server Connection ───
+    const SERVER_URL = 'ws://localhost:8765';
 
-            const fileName = file.name.replace(/\.tar\.gz$|\.tgz$|\.gz$|\.zip$|\.rar$/, '');
-            if (modelStatus) modelStatus.textContent = 'Loading...';
+    function testServerConnection() {
+        if (modelStatus) modelStatus.textContent = '🔄 Connecting...';
 
-            try {
-                // Read file and store in IndexedDB
-                const arrayBuffer = await file.arrayBuffer();
-                await storeModel(fileName, arrayBuffer);
+        try {
+            const ws = new WebSocket(SERVER_URL);
+            const timeout = setTimeout(() => {
+                ws.close();
+                if (modelStatus) modelStatus.textContent = '❌ Timeout';
+            }, 5000);
 
-                // Save config specifically for the currently selected language
-                const configKey = `modelConfig_${selectedLang}`;
-                const config = { blobKey: fileName, path: fileName, id: fileName };
-                chrome.storage?.local?.set({ [configKey]: config });
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ action: 'ping' }));
+            };
 
-                // Tell offscreen to load from IndexedDB by key
-                const resp = await chrome.runtime.sendMessage({
-                    action: 'vosk-load-model',
-                    modelUrl: '', // offscreen will read from IndexedDB
-                    modelPath: fileName,
-                    modelId: fileName
-                });
-
-                if (resp?.ok) {
-                    if (modelStatus) modelStatus.textContent = fileName;
-                } else {
-                    if (modelStatus) modelStatus.textContent = fileName + ' (saved)';
-                }
-            } catch (err) {
-                if (modelStatus) modelStatus.textContent = 'Error';
-                showError(err.message);
-            }
-        });
-    }
-
-    function refreshModelStatusFor(langCode) {
-        if (!modelStatus) return;
-        const configKey = `modelConfig_${langCode}`;
-        chrome.storage?.local?.get([configKey], (r) => {
-            const cfg = r[configKey];
-            if (cfg?.path) {
-                modelStatus.textContent = cfg.path + ' (saved)';
-                // Optional: Ping offscreen to see if it's currently loaded
-                chrome.runtime.sendMessage({ target: 'offscreen', action: 'vosk-ping' }, (res) => {
-                    if (!chrome.runtime.lastError && res?.ok) {
-                        modelStatus.textContent = cfg.path; // Loaded
+            ws.onmessage = (ev) => {
+                clearTimeout(timeout);
+                try {
+                    const data = JSON.parse(ev.data);
+                    const models = data.models || [];
+                    if (models.length) {
+                        if (modelStatus) modelStatus.textContent = `✅ Connected (${models.join(', ')})`;
+                    } else {
+                        if (modelStatus) modelStatus.textContent = '✅ Connected (no models)';
                     }
-                });
-            } else {
-                modelStatus.textContent = 'No model selected for ' + langCode;
-            }
-        });
+                } catch (_e) {
+                    if (modelStatus) modelStatus.textContent = '✅ Connected';
+                }
+                ws.close();
+                chrome.storage?.local?.set({ voskServerUrl: SERVER_URL });
+            };
+
+            ws.onerror = () => {
+                clearTimeout(timeout);
+                if (modelStatus) modelStatus.textContent = '❌ Server offline';
+            };
+        } catch (err) {
+            if (modelStatus) modelStatus.textContent = '❌ ' + err.message;
+        }
     }
 
-    // Load saved settings
+    // ─── Load saved settings ───
     chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay', 'engineMode'], (r) => {
         if (chrome.runtime.lastError) return;
         selectedLang = r?.sttLang || cfg?.defaultLang || 'ar-IQ';
@@ -179,11 +143,9 @@
             insertDelaySlider.value = r.insertDelay;
             updateDelayLabel(r.insertDelay);
         }
-        // Engine mode
         if (r?.engineMode) setEngineMode(r.engineMode);
-
-        // Restore language-specific model status text
-        refreshModelStatusFor(selectedLang);
+        // Auto-test on popup open if in offline mode
+        if (r?.engineMode === 'offline') testServerConnection();
     });
 
     // ISSUE-19: Check FAB state and sync button text
@@ -195,7 +157,7 @@
                 if (chrome.runtime.lastError) return;
                 toggleBtn.textContent = response?.hasFab ? 'Hide Mic Button' : 'Show Mic Button';
             });
-        } catch (_err) { /* Keep default text */ }
+        } catch (_err) { }
     });
 
     // ─── Split Language Picker ───
@@ -221,14 +183,12 @@
 
         splitLang1.value = defaults[0];
         splitLang2.value = defaults[1];
-
         if (isEnabled && splitPicker) splitPicker.classList.add('visible');
     }
 
     function saveSplitLangs() {
         const pair = [splitLang1.value, splitLang2.value];
         chrome.storage?.local?.set({ splitLangs: pair });
-        // Notify content script
         chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
             if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setSplitLangs', splitLangs: pair });
         });
@@ -245,7 +205,6 @@
         });
     }
 
-    // Split FAB toggle
     if (splitToggle) {
         splitToggle.addEventListener('change', async () => {
             const enabled = splitToggle.checked;
@@ -255,27 +214,20 @@
             try {
                 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                 if (tab) chrome.tabs.sendMessage(tab.id, { action: 'setSplit', split: enabled });
-            } catch (_err) { console.warn('[Vosk STT] setSplit failed', _err); }
+            } catch (_err) { }
         });
     }
 
-    // ROAD-01: Auto-show FAB toggle
     if (autoShowToggle) {
         autoShowToggle.addEventListener('change', () => {
             const isAuto = autoShowToggle.checked;
             chrome.storage?.local?.set({ fabAutoShow: isAuto });
-            // Sync the manual toggle button text since the FAB will be auto-created/removed
-            if (toggleBtn) {
-                toggleBtn.textContent = isAuto ? 'Hide Mic Button' : 'Show Mic Button';
-            }
+            if (toggleBtn) toggleBtn.textContent = isAuto ? 'Hide Mic Button' : 'Show Mic Button';
         });
     }
 
-
     async function ensureContentScript(tabId, tabUrl) {
-        if (tabUrl && RESTRICTED_RE.test(tabUrl)) {
-            throw new Error('restricted');
-        }
+        if (tabUrl && RESTRICTED_RE.test(tabUrl)) throw new Error('restricted');
         try {
             await chrome.tabs.sendMessage(tabId, { action: 'ping' });
         } catch (_err) {
@@ -297,13 +249,11 @@
         }
     });
 
-    // ISSUE-19: Toggle button text on click
     toggleBtn.addEventListener('click', async () => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab) return;
         try {
             await ensureContentScript(tab.id, tab.url);
-            // Check current state before toggling
             chrome.tabs.sendMessage(tab.id, { action: 'checkFab' }, (response) => {
                 if (chrome.runtime.lastError) return;
                 const willShow = !response?.hasFab;

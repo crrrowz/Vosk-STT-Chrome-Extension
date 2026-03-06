@@ -41,22 +41,20 @@
         <span class="engine-label">Engine</span>
         <div class="engine-toggle" id="engineToggle">
           <button class="engine-btn active" data-mode="online">Online</button>
-          <button class="engine-btn" data-mode="offline">Offline</button>
+          <button class="engine-btn" data-mode="auto">Auto</button>
+          <button class="engine-btn" data-mode="offline">Local</button>
         </div>
       </div>
 
-      <!-- Offline Model Config (shown only when offline) -->
+      <!-- Local Server Config (shown only when local mode) -->
       <div class="model-config hidden" id="modelConfig">
         <div class="model-info">
-          <span class="model-label">Vosk Model</span>
-          <span class="model-status" id="modelStatus">No model</span>
+          <span class="model-label">Local Server</span>
+          <span class="model-status" id="modelStatus">⏳ Checking...</span>
         </div>
         <div class="model-actions">
-          <label class="model-btn" id="modelFileLabel">
-            Choose Model File
-            <input type="file" id="modelFileInput" accept=".zip,.rar,.gz,.tgz,.tar.gz,.tar" hidden>
-          </label>
-          <a href="https://alphacephei.com/vosk/models" target="_blank" class="model-link">Download Models</a>
+          <a class="model-link" href="https://github.com/crrrowz/Vosk-STT-Chrome-Extension/tree/main/server"
+            target="_blank" rel="noopener">Server Setup Guide ↗</a>
         </div>
       </div>
 

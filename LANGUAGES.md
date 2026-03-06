@@ -120,6 +120,21 @@ For RTL languages (Arabic, Hebrew, Persian):
 - The overlay and FAB already support RTL via `direction: rtl`
 - Text insertion respects cursor position
 
-## AI Post-Processing
+## Local Server Model
 
-The **🤖 AI Formatting** toggle in the popup works for **all languages** — it uses Gemini Nano to add punctuation and fix spelling regardless of which language module is active. It requires Chrome 128+ with the Prompt API enabled.
+To enable offline STT for a new language, download a Vosk model and place it in:
+
+```
+server/models/<lang-prefix>/
+    └── vosk-model-<name>/
+        ├── am/
+        └── ...
+```
+
+For example, to add French offline support:
+```
+server/models/fr/vosk-model-fr-0.22/
+```
+
+The server auto-discovers models on startup and loads them on-demand when requested.
+Download models from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models).

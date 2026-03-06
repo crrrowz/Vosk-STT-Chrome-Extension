@@ -11,12 +11,19 @@
     let recognition = null;
     let shouldBeRunning = false;
     let currentLang = 'ar-IQ';
-    let restartCount = 0;
+    let onlineRestartCount = 0;
+    let localRestartCount = 0;
     let stopGeneration = 0;
-    const MAX_RESTARTS = 200;
+    const MAX_RESTARTS = 20;
     let lastActivityTime = 0;
     let watchdogTimer = null;
-    const WATCHDOG_INTERVAL = 8000; // 8s — if no activity, force restart
+    let pendingRestart = false;
+    const WATCHDOG_INTERVAL = 10000;
+
+    // Local server mic state (WebSocket managed by content.js bridge)
+    let localStream = null;
+    let localProcessor = null;
+    let localContext = null;
 
     /* ═══════════════════════════════════════════
        Connection Health Tracker
@@ -30,6 +37,7 @@
 
     function setConnStatus(status) {
         if (status === connStatus) return;
+        console.log(`[Vosk Engine] Connection status: ${connStatus} → ${status}`);
         connStatus = status;
         emit('connectionStatus', { status });
     }
@@ -164,13 +172,18 @@
        ═══════════════════════════════════════════ */
 
     function handleCommand(e) {
-        const { command, lang } = e.detail;
+        const { command, lang, engineMode, voskServerUrl } = e.detail;
 
         if (command === 'start') {
             shouldBeRunning = true;
             restartCount = 0;
             currentLang = lang || 'ar-IQ';
+            // Store engine config from content.js (has chrome.storage access)
+            _engineMode = engineMode || 'online';
+            _serverUrl = voskServerUrl || 'ws://localhost:8765';
             buildCommandMaps(currentLang);
+            onlineRestartCount = 0;
+            localRestartCount = 0;
             startRecognition(currentLang);
 
         } else if (command === 'stop') {
@@ -184,9 +197,21 @@
             buildCommandMaps(currentLang);
             emit('langChanged', { lang: currentLang });
             if (shouldBeRunning) {
-                restartCount = 0;
-                if (recognition) { try { recognition.abort(); } catch (_err) { } recognition = null; }
-                startRecognition(currentLang);
+                onlineRestartCount = 0;
+                localRestartCount = 0;
+                if (_engineMode === 'offline') {
+                    // Reconfigure via bridge (mic stays active)
+                    startLocalRecognition(currentLang, _serverUrl);
+                } else if (_engineMode === 'auto') {
+                    // Full restart to re-race both engines
+                    stopLocalRecognition();
+                    if (recognition) { try { recognition.abort(); } catch (_err) { } recognition = null; }
+                    _autoWinner = null;
+                    startRecognition(currentLang);
+                } else {
+                    if (recognition) { try { recognition.abort(); } catch (_err) { } recognition = null; }
+                    startRecognition(currentLang);
+                }
             }
         }
     }
@@ -226,7 +251,220 @@
 
     const MIN_CONFIDENCE = 0.3;
 
+    let _engineMode = 'online';
+    let _serverUrl = 'ws://localhost:8765';
+    let _autoWinner = null; // 'online' | 'local' — set when first final result arrives in auto mode
+
     function startRecognition(lang) {
+        if (!shouldBeRunning) return;
+
+        if (_engineMode === 'auto') {
+            // Race both engines — first final result wins
+            _autoWinner = null;
+            console.log('[Vosk Engine] AUTO mode: racing Online + Local');
+            startLocalRecognition(lang, _serverUrl);
+            startOnlineRecognition(lang);
+        } else if (_engineMode === 'offline') {
+            startLocalRecognition(lang, _serverUrl);
+        } else {
+            startOnlineRecognition(lang);
+        }
+    }
+
+    /**
+     * In auto mode, check if this source should emit results.
+     * Returns true if this source is allowed to emit.
+     * Sets winner on first final result.
+     */
+    function autoGate(source, isFinal) {
+        if (_engineMode !== 'auto') return true; // not auto mode, always allow
+        if (_autoWinner) return _autoWinner === source; // winner already decided
+        if (isFinal) {
+            _autoWinner = source;
+            console.log(`[Vosk Engine] AUTO winner: ${source}`);
+            // Stop the loser
+            if (source === 'online') {
+                stopLocalRecognition();
+            } else {
+                if (recognition) { try { recognition.abort(); } catch (_e) { } recognition = null; }
+            }
+        }
+        return true; // before winner is decided, allow partials from both
+    }
+
+    /* ═══════════════════════════════════════════
+       Local Server Mode (Mic → content.js bridge)
+       WebSocket lives in content.js (extension CSP).
+       speech-engine only captures mic and emits audio.
+       ═══════════════════════════════════════════ */
+
+    let _localMicActive = false;
+    let _localWatchdog = null;
+
+    async function startLocalRecognition(lang, serverUrl) {
+        if (!shouldBeRunning) return;
+
+        // If mic already active (language switch), just tell content.js to reconfigure
+        if (_localMicActive) {
+            console.log('[Vosk Engine] Mic active, requesting reconfigure for', lang);
+            document.dispatchEvent(new CustomEvent('vosk-local-control', {
+                detail: { action: 'configure', lang, sampleRate: 16000 }
+            }));
+            return;
+        }
+
+        stopLocalRecognition();
+        setConnStatus('connecting');
+        recognitionStartTime = Date.now();
+        firstResultReceived = false;
+
+        // Tell content.js to open WebSocket and configure
+        document.dispatchEvent(new CustomEvent('vosk-local-control', {
+            detail: { action: 'start', serverUrl, lang, sampleRate: 16000 }
+        }));
+    }
+
+    // Listen for server messages forwarded by content.js
+    function _handleServerMsg(e) {
+        const msg = e.detail;
+        if (!msg) return;
+        lastActivityTime = Date.now();
+
+        if (msg.type === 'status') {
+            if (msg.status === 'ready') {
+                console.log('[Vosk Engine] Server ready:', msg.msg);
+                setConnStatus('online');
+                recognitionStartTime = Date.now();
+                // Start local watchdog
+                clearInterval(_localWatchdog);
+                _localWatchdog = setInterval(() => {
+                    if (!_localMicActive || !shouldBeRunning) {
+                        clearInterval(_localWatchdog);
+                        _localWatchdog = null;
+                        return;
+                    }
+                    const silentMs = Date.now() - lastActivityTime;
+                    if (silentMs > WATCHDOG_INTERVAL * 3) {
+                        console.warn('[Vosk Engine] Local watchdog: server stale, reconnecting');
+                        clearInterval(_localWatchdog);
+                        _localWatchdog = null;
+                        stopLocalRecognition();
+                        if (shouldBeRunning) startLocalRecognition(currentLang, _serverUrl);
+                    }
+                }, WATCHDOG_INTERVAL);
+                if (!_localMicActive) startMicCapture();
+            } else if (msg.status === 'error') {
+                console.warn('[Vosk Engine] Server error:', msg.msg);
+                if (_engineMode === 'auto') {
+                    console.log('[Vosk Engine] AUTO: local unavailable, using online only');
+                    _autoWinner = 'online';
+                } else {
+                    emit('error', { error: 'server-error', message: msg.msg });
+                    setConnStatus('offline');
+                }
+            } else if (msg.status === 'stopped') {
+                emit('stopped', {});
+            } else if (msg.status === 'ws-closed') {
+                stopLocalRecognition();
+                if (shouldBeRunning && localRestartCount < MAX_RESTARTS) {
+                    localRestartCount++;
+                    const delay = Math.min(1000 * Math.pow(2, localRestartCount - 1), 10000);
+                    console.log(`[Vosk Engine] Reconnecting local in ${delay}ms (#${localRestartCount})`);
+                    setTimeout(() => {
+                        if (shouldBeRunning) {
+                            if (_engineMode === 'auto') {
+                                startLocalRecognition(currentLang, _serverUrl);
+                            } else {
+                                startRecognition(currentLang);
+                            }
+                        }
+                    }, delay);
+                } else if (shouldBeRunning) {
+                    emit('stopped', {});
+                }
+            } else if (msg.status === 'ws-error') {
+                setConnStatus('offline');
+            }
+            return;
+        }
+
+        if (!firstResultReceived) {
+            firstResultReceived = true;
+            networkErrorCount = 0;
+            const latency = Date.now() - recognitionStartTime;
+            setConnStatus(latency > SLOW_THRESHOLD ? 'slow' : 'online');
+        }
+
+        if (msg.type === 'result' && msg.text) {
+            if (!autoGate('local', true)) return;
+            const cmdResult = processVoiceCommands(msg.text);
+            if (cmdResult && cmdResult.startsWith('__CMD:')) {
+                emit('voiceCommand', { command: cmdResult.substring(6) });
+            } else {
+                const processed = postProcess(cmdResult || msg.text);
+                emit('result', { final: processed, interim: '', preview: '' });
+            }
+        } else if (msg.type === 'partial' && msg.text) {
+            if (!autoGate('local', false)) return;
+            emit('result', { final: '', interim: msg.text, preview: '' });
+        }
+    }
+    document.addEventListener('vosk-server-msg', _handleServerMsg);
+
+    async function startMicCapture() {
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+            });
+            localContext = new AudioContext({ sampleRate: 16000 });
+            const source = localContext.createMediaStreamSource(localStream);
+
+            localProcessor = localContext.createScriptProcessor(2048, 1, 1);
+            localProcessor.onaudioprocess = (e) => {
+                if (!_localMicActive) return;
+                const float32 = e.inputBuffer.getChannelData(0);
+                const pcm16 = new Int16Array(float32.length);
+                for (let i = 0; i < float32.length; i++) {
+                    pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
+                }
+                // Send audio to content.js which forwards to WebSocket
+                document.dispatchEvent(new CustomEvent('vosk-audio-data', {
+                    detail: pcm16.buffer
+                }));
+            };
+
+            source.connect(localProcessor);
+            localProcessor.connect(localContext.destination);
+
+            _localMicActive = true;
+            localRestartCount = 0;
+            emit('started', {});
+            console.log('[Vosk Engine] Mic capturing → content.js bridge');
+        } catch (err) {
+            console.error('[Vosk Engine] Mic access failed:', err);
+            emit('error', { error: 'audio-capture', message: err.message });
+            shouldBeRunning = false;
+        }
+    }
+
+    function stopLocalRecognition() {
+        _localMicActive = false;
+        clearInterval(_localWatchdog);
+        _localWatchdog = null;
+        if (localProcessor) { try { localProcessor.disconnect(); } catch (_e) { } localProcessor = null; }
+        if (localContext) { try { localContext.close(); } catch (_e) { } localContext = null; }
+        if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+        // Tell content.js to close WebSocket
+        document.dispatchEvent(new CustomEvent('vosk-local-control', {
+            detail: { action: 'stop' }
+        }));
+    }
+
+    /* ═══════════════════════════════════════════
+       Online Mode (Web Speech API)
+       ═══════════════════════════════════════════ */
+
+    function startOnlineRecognition(lang) {
         if (!shouldBeRunning) return;
 
         if (recognition) { try { recognition.abort(); } catch (_err) { } recognition = null; }
@@ -234,7 +472,6 @@
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) { emit('error', { error: 'unsupported' }); return; }
 
-        // Connection health: mark as connecting
         recognitionStartTime = Date.now();
         firstResultReceived = false;
         setConnStatus('connecting');
@@ -250,7 +487,6 @@
         let shortPauseTimer = null;
         const myGeneration = stopGeneration;
 
-        // Start liveness watchdog
         lastActivityTime = Date.now();
         clearInterval(watchdogTimer);
         watchdogTimer = setInterval(() => {
@@ -260,43 +496,44 @@
                 return;
             }
             const silentMs = Date.now() - lastActivityTime;
-            // Connection health: progressive degradation
             if (silentMs > WATCHDOG_INTERVAL * 2) {
                 setConnStatus('offline');
             } else if (silentMs > WATCHDOG_INTERVAL) {
                 setConnStatus('slow');
             }
             if (silentMs > WATCHDOG_INTERVAL && recognition) {
-                console.warn(`[Vosk STT] Watchdog: ${silentMs}ms silent, force-restarting`);
+                console.warn(`[Vosk Engine] Watchdog: ${silentMs}ms silent, force-restarting (restart #${restartCount + 1})`);
                 try { recognition.abort(); } catch (_e) { }
                 recognition = null;
-                restartCount++;
-                if (restartCount < MAX_RESTARTS) {
-                    setTimeout(() => {
-                        if (shouldBeRunning && myGeneration === stopGeneration) {
-                            startRecognition(currentLang);
-                        }
-                    }, 300);
-                }
             }
         }, WATCHDOG_INTERVAL);
 
-        recognition.onstart = () => emit('started', {});
-        recognition.onaudiostart = () => emit('audiostart', {});
-        recognition.onspeechstart = () => emit('speechstart', {});
+        recognition.onstart = () => {
+            console.log('[Vosk Engine] recognition.onstart fired');
+            pendingRestart = false;
+            onlineRestartCount = 0;
+            emit('started', {});
+        };
+        recognition.onaudiostart = () => {
+            console.log('[Vosk Engine] recognition.onaudiostart fired');
+            emit('audiostart', {});
+        };
+        recognition.onspeechstart = () => {
+            console.log('[Vosk Engine] recognition.onspeechstart fired');
+            restartCount = 0;
+            emit('speechstart', {});
+        };
 
         recognition.onresult = (event) => {
             clearTimeout(shortPauseTimer);
             lastActivityTime = Date.now();
 
-            // Connection health: first result = measure latency
             if (!firstResultReceived) {
                 firstResultReceived = true;
                 networkErrorCount = 0;
                 const latency = Date.now() - recognitionStartTime;
                 setConnStatus(latency > SLOW_THRESHOLD ? 'slow' : 'online');
             } else if (connStatus !== 'online') {
-                // Recovery: results flowing again
                 setConnStatus('online');
             }
 
@@ -320,9 +557,10 @@
             const rawDelta = allFinal.substring(Math.min(emittedLength, allFinal.length)).trim();
 
             if (rawDelta) {
+                if (!autoGate('online', true)) return; // auto mode: local won, ignore
                 lastInterim = '';
                 emittedLength = allFinal.length;
-                restartCount = 0; // successful result — reset restart budget
+                onlineRestartCount = 0;
 
                 const cmdResult = processVoiceCommands(rawDelta);
                 if (cmdResult && cmdResult.startsWith('__CMD:')) {
@@ -332,6 +570,7 @@
                     emit('result', { final: processed, interim: interim, preview: '' });
                 }
             } else {
+                if (!autoGate('online', false)) return;
                 lastInterim = interim;
                 emit('result', { final: '', interim: interim, preview: '' });
             }
@@ -351,9 +590,8 @@
             if (event.error === 'no-speech' || event.error === 'aborted') return;
             if (event.error === 'network') {
                 networkErrorCount++;
-                console.warn('[Vosk STT] Network error — will auto-retry');
                 setConnStatus(networkErrorCount >= 3 ? 'offline' : 'slow');
-                return; // let onend handle the restart
+                return;
             }
             emit('error', { error: event.error });
             if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error)) {
@@ -368,22 +606,13 @@
 
             const pendingInterim = lastInterim.trim();
             lastInterim = '';
-            if (pendingInterim && myGeneration === stopGeneration && shouldBeRunning) {
+            if (pendingInterim && myGeneration === stopGeneration && shouldBeRunning && autoGate('online', true)) {
                 const cmdResult = processVoiceCommands(pendingInterim);
                 if (cmdResult && cmdResult.startsWith('__CMD:')) {
                     emit('voiceCommand', { command: cmdResult.substring(6) });
                 } else {
                     let finalRaw = postProcess(cmdResult || pendingInterim);
                     emit('result', { final: finalRaw, interim: '', preview: '' });
-
-                    // Fire-and-forget AI post-processing (non-blocking)
-                    if (aiProcessor.available) {
-                        aiProcessor.process(finalRaw, currentLang).then(corrected => {
-                            if (corrected && corrected !== finalRaw) {
-                                emit('result', { final: '', interim: corrected, preview: '' });
-                            }
-                        }).catch(() => { });
-                    }
                 }
             }
 
@@ -392,12 +621,23 @@
                 emit('stopped', {});
                 return;
             }
-            if (shouldBeRunning && restartCount < MAX_RESTARTS) {
-                restartCount++;
-                const delay = restartCount > 10 ? 500 : 200;
+            if (shouldBeRunning && onlineRestartCount < MAX_RESTARTS) {
+                if (pendingRestart) return;
+                pendingRestart = true;
+                onlineRestartCount++;
+                const delay = Math.min(500 * Math.pow(2, onlineRestartCount - 1), 5000);
                 setTimeout(() => {
+                    pendingRestart = false;
                     if (shouldBeRunning && myGeneration === stopGeneration) {
-                        startRecognition(currentLang);
+                        // Auto mode: only restart online part (local is still running)
+                        if (_engineMode === 'auto') {
+                            if (!_autoWinner || _autoWinner === 'online') {
+                                startOnlineRecognition(currentLang);
+                            }
+                            // If local won, no need to restart online
+                        } else {
+                            startRecognition(currentLang);
+                        }
                     }
                 }, delay);
             } else if (shouldBeRunning) {
@@ -409,83 +649,25 @@
             }
         };
 
-        try { recognition.start(); }
-        catch (_err) { emit('error', { error: 'start-failed', message: _err.message }); }
+        try {
+            recognition.start();
+        } catch (_err) {
+            emit('error', { error: 'start-failed', message: _err.message });
+        }
     }
-
-    /* ═══════════════════════════════════════════
-       AI Post-Processor (Gemini Nano)
-       ═══════════════════════════════════════════ */
-
-    const aiProcessor = {
-        session: null,
-        available: false,
-        initializing: false,
-        lastContext: '',
-
-        async init() {
-            if (this.initializing || this.available) return;
-            this.initializing = true;
-            try {
-                const ai = window.ai || self.ai;
-                if (!ai?.languageModel) return;
-                const caps = await ai.languageModel.capabilities();
-                if (caps.available === 'no') return;
-
-                this.session = await ai.languageModel.create({
-                    systemPrompt: [
-                        'You are an expert STT Post-Processor.',
-                        'Task: Add punctuation, fix spelling, and convert spelled-out numbers to digits.',
-                        'STRICT RULES:',
-                        '- Do NOT change, add, or remove non-number words. Keep the meaning exactly the same.',
-                        '- Do NOT translate. Keep the SAME language as the input.',
-                        '- Convert written numbers to digits (e.g., "مئة وخمسين" -> "150").',
-                        '- Context matters: "الف" in "الفسحة" is part of a word, do NOT convert it to 1000.',
-                        '- Output ONLY the corrected text, nothing else.',
-                        '- Use correct punctuation for the input language (Arabic: ، ؟ ؛)',
-                    ].join('\n'),
-                });
-                this.available = true;
-            } catch (_err) {
-                // Not supported
-            } finally {
-                this.initializing = false;
-            }
-        },
-
-        async process(text, langCode) {
-            if (!this.available || !text.trim()) return text;
-            try {
-                const prompt = this.lastContext
-                    ? `[Lang:${langCode}] Context: "${this.lastContext}"\nText: ${text}`
-                    : `[Lang:${langCode}] ${text}`;
-                const result = await this.session.prompt(prompt);
-                let cleaned = (result || '').trim()
-                    .replace(/^\[Lang:.*?\]\s*/g, '')
-                    .replace(/^(Context|Text|Input|Output):\s*/gi, '')
-                    .replace(/^"|"$/g, ''); // strip surrounding quotes if AI adds them
-                if (!cleaned) return text;
-                this.lastContext = cleaned.slice(-80);
-                return cleaned;
-            } catch (_err) {
-                this.available = false;
-                this.session = null;
-                this.init();
-                return text;
-            }
-        },
-    };
-
-    // Always init AI on engine load
-    aiProcessor.init();
 
     /* ═══════════════════════════════════════════ */
 
     function stopRecognition() {
         shouldBeRunning = false;
+        pendingRestart = false;
         stopGeneration++;
+        _autoWinner = null;
+        onlineRestartCount = 0;
+        localRestartCount = 0;
         clearInterval(watchdogTimer);
         watchdogTimer = null;
+        stopLocalRecognition();
         if (recognition) {
             try { recognition.abort(); } catch (_err) { }
             recognition = null;
@@ -496,5 +678,6 @@
     window.__voskSttCleanup = () => {
         stopRecognition();
         document.removeEventListener('vosk-stt-command', handleCommand);
+        document.removeEventListener('vosk-server-msg', _handleServerMsg);
     };
 })();

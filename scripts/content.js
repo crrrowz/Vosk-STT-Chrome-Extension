@@ -20,7 +20,6 @@
     let insertBuffer = '';    // accumulated text during delay
     let insertTimer = null;   // debounce timer for delayed insert
     let engineMode = 'online'; // 'online' | 'offline'
-    let modelConfig = null;   // { url, path, id } for offline Vosk model
 
     const cfg = window.VOSK_LANG_CONFIG;
 
@@ -99,10 +98,10 @@
 
     injectSpeechEngine();
 
-    function sendEngineCommand(command, lang) {
+    function sendEngineCommand(command, lang, extra) {
         if (!isExtensionAlive()) return; // ISSUE-04
         document.dispatchEvent(new CustomEvent('vosk-stt-command', {
-            detail: { command, lang }
+            detail: { command, lang, ...(extra || {}) }
         }));
     }
 
@@ -892,11 +891,14 @@
     /* ───── Start / Stop ───── */
 
     function startRecognition(lang) {
+        console.log(`[Vosk Content] startRecognition() lang=${lang} engineMode=${engineMode}`);
         if (!isExtensionAlive()) { // ISSUE-04
+            console.warn('[Vosk Content] Extension context dead, removing FAB');
             removeFab();
             return;
         }
         targetInput = resolveTargetInput();
+        console.log('[Vosk Content] targetInput resolved:', targetInput?.tagName, targetInput?.id);
         isRecording = true;
         updateFabState();
         showOverlay();
@@ -904,57 +906,118 @@
             chrome.runtime.sendMessage({ action: 'startRecordingFromTab', tabId: 'self' });
         } catch (_err) { console.warn('[Vosk STT] startRecordingFromTab failed', _err); }
 
-        if (engineMode === 'offline') {
-            // Fetch the specific model configuration for THIS language
-            const configKey = `modelConfig_${lang}`;
-            chrome.storage?.local?.get([configKey], (r) => {
-                const langModelConfig = r[configKey];
-
-                if (!langModelConfig) {
-                    updateOverlayText('', 'No offline model loaded for ' + lang);
-                    setConnStatus('offline');
-                    return;
-                }
-
-                // Route to offscreen Vosk WASM engine
-                chrome.runtime.sendMessage({
-                    action: 'vosk-offline-start',
-                    lang,
-                    modelUrl: langModelConfig.url || '',
-                    modelPath: langModelConfig.path,
-                    modelId: langModelConfig.id
-                }, (resp) => {
-                    if (chrome.runtime.lastError || !resp?.ok) {
-                        updateOverlayText('', 'Model load failed');
-                    }
+        if (engineMode === 'offline' || engineMode === 'auto') {
+            // Local/Auto mode: pass engineMode + serverUrl to speech-engine
+            chrome.storage?.local?.get(['voskServerUrl'], (r) => {
+                sendEngineCommand('start', lang, {
+                    engineMode,
+                    voskServerUrl: r?.voskServerUrl || 'ws://localhost:8765'
                 });
             });
         } else {
-            // Online: use webkitSpeechRecognition via injected speech-engine.js
-            setTimeout(() => sendEngineCommand('start', lang), 100);
+            // Online: use webkitSpeechRecognition via speech-engine.js
+            setTimeout(() => sendEngineCommand('start', lang, { engineMode: 'online' }), 100);
         }
     }
 
     function stopRecognition() {
-        if (engineMode === 'offline') {
-            chrome.runtime.sendMessage({ action: 'vosk-offline-stop' });
-        }
         sendEngineCommand('stop');
+    }
+
+    /* ───── Local Server WebSocket Bridge ─────
+       WebSocket runs here (content script = extension CSP).
+       speech-engine.js (main world) sends control + audio via CustomEvent.
+       We forward server results back as vosk-server-msg.
+    ───── */
+
+    let _localWs = null;
+    let _wsClosedIntentionally = false;
+
+    document.addEventListener('vosk-local-control', (e) => {
+        const cmd = e.detail;
+        if (!cmd) return;
+
+        if (cmd.action === 'start') {
+            // Close any existing connection
+            _wsClosedIntentionally = true;
+            if (_localWs) { try { _localWs.close(); } catch (_e) { } _localWs = null; }
+
+            const url = cmd.serverUrl || 'ws://localhost:8765';
+            console.log('[Vosk Bridge] Connecting to', url);
+
+            try {
+                _wsClosedIntentionally = false;
+                _localWs = new WebSocket(url);
+            } catch (err) {
+                _emitServerMsg({ type: 'status', status: 'ws-error', msg: err.message });
+                return;
+            }
+
+            _localWs.onopen = () => {
+                console.log('[Vosk Bridge] WebSocket connected');
+                _localWs.send(JSON.stringify({
+                    action: 'configure',
+                    lang: cmd.lang || 'ar-IQ',
+                    sampleRate: cmd.sampleRate || 16000
+                }));
+            };
+
+            _localWs.onmessage = (ev) => {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    _emitServerMsg(msg);
+                } catch (_e) { }
+            };
+
+            _localWs.onerror = () => {
+                console.error('[Vosk Bridge] WebSocket error');
+                _emitServerMsg({ type: 'status', status: 'ws-error' });
+            };
+
+            _localWs.onclose = () => {
+                console.log('[Vosk Bridge] WebSocket closed');
+                if (!_wsClosedIntentionally) {
+                    _emitServerMsg({ type: 'status', status: 'ws-closed' });
+                }
+                _wsClosedIntentionally = false;
+                _localWs = null;
+            };
+
+        } else if (cmd.action === 'configure') {
+            // Reconfigure for new language (WS stays open)
+            if (_localWs && _localWs.readyState === WebSocket.OPEN) {
+                _localWs.send(JSON.stringify({
+                    action: 'configure',
+                    lang: cmd.lang,
+                    sampleRate: cmd.sampleRate || 16000
+                }));
+            }
+
+        } else if (cmd.action === 'stop') {
+            if (_localWs) {
+                _wsClosedIntentionally = true;
+                try { _localWs.send(JSON.stringify({ action: 'stop' })); } catch (_e) { }
+                try { _localWs.close(); } catch (_e) { }
+                _localWs = null;
+            }
+        }
+    });
+
+    // Forward audio data from speech-engine to WebSocket
+    document.addEventListener('vosk-audio-data', (e) => {
+        if (_localWs && _localWs.readyState === WebSocket.OPEN && e.detail) {
+            _localWs.send(e.detail);
+        }
+    });
+
+    function _emitServerMsg(msg) {
+        document.dispatchEvent(new CustomEvent('vosk-server-msg', { detail: msg }));
     }
 
     /* ───── Chrome Message Listener (ISSUE-14: proper async sendResponse) ───── */
 
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (msg.action === 'ping') { sendResponse({ ok: true }); return true; }
-
-        // Handle offline engine events from background.js (forwarded from offscreen doc)
-        if (msg.action === 'vosk-offline-event') {
-            const evt = new CustomEvent('vosk-stt-event', {
-                detail: { type: msg.type, ...msg.data }
-            });
-            document.dispatchEvent(evt);
-            return true;
-        }
 
         if (msg.action === 'checkFab') {
             sendResponse({ hasFab: !!fab });
@@ -1096,7 +1159,7 @@
 
     // ISSUE-18 + ROAD-01: Auto-show FAB based on user preference
     if (isExtensionAlive()) {
-        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay', 'engineMode', 'modelConfig'], (r) => {
+        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay', 'engineMode'], (r) => {
             if (chrome.runtime.lastError) return;
             if (r?.fabAutoShow === false) return;
             currentLang = r?.sttLang || 'ar-IQ';
@@ -1104,7 +1167,7 @@
             if (r?.splitLangs) splitLangs = r.splitLangs;
             if (r?.insertDelay != null) insertDelay = r.insertDelay;
             engineMode = r?.engineMode || 'online';
-            modelConfig = r?.modelConfig || null;
+            console.log(`[Vosk Content] Init: lang=${currentLang} engine=${engineMode}`);
             createFab();
             updateFabLang();
         });
@@ -1115,11 +1178,28 @@
             if (changes.insertDelay) {
                 insertDelay = changes.insertDelay.newValue || 0;
             }
+            if (changes.sttLang) {
+                const newLang = changes.sttLang.newValue;
+                if (newLang && newLang !== currentLang) {
+                    currentLang = newLang;
+                    console.log(`[Vosk Content] Language changed to: ${currentLang}`);
+                    updateFabLang();
+                    if (isRecording) {
+                        console.log('[Vosk Content] Restarting recognition with new language');
+                        stopRecognition();
+                        setTimeout(() => startRecognition(currentLang), 200);
+                    }
+                }
+            }
             if (changes.engineMode) {
                 engineMode = changes.engineMode.newValue || 'online';
-            }
-            if (changes.modelConfig) {
-                modelConfig = changes.modelConfig.newValue || null;
+                console.log(`[Vosk Content] Engine mode changed to: ${engineMode}`);
+                // Auto-restart if currently recording
+                if (isRecording) {
+                    console.log('[Vosk Content] Restarting recognition with new engine mode');
+                    stopRecognition();
+                    setTimeout(() => startRecognition(currentLang), 200);
+                }
             }
             if (!changes.fabAutoShow) return;
             if (changes.fabAutoShow.newValue === false) {

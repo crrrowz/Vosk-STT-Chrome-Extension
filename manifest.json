@@ -1,13 +1,12 @@
 {
     "manifest_version": 3,
     "name": "Vosk Speech-to-Text",
-    "version": "1.2.0",
-    "description": "Real-time speech-to-text on any input field — online or offline with Vosk WASM",
+    "version": "2.0.0",
+    "description": "Real-time speech-to-text on any input field — online via Web Speech API or locally via Vosk server",
     "permissions": [
         "activeTab",
         "storage",
-        "scripting",
-        "offscreen"
+        "scripting"
     ],
     "background": {
         "service_worker": "scripts/background.js"
@@ -75,17 +74,6 @@
         }
     ],
     "content_security_policy": {
-        "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://*; default-src 'self'; style-src 'self' 'unsafe-inline'"
-    },
-    "sandbox": {
-        "pages": [
-            "offscreen/sandbox.html"
-        ]
-    },
-    "cross_origin_embedder_policy": {
-        "value": "require-corp"
-    },
-    "cross_origin_opener_policy": {
-        "value": "same-origin"
+        "extension_pages": "script-src 'self'; connect-src 'self' https://* ws://localhost:* ws://127.0.0.1:*; default-src 'self'; style-src 'self' 'unsafe-inline'"
     }
 }

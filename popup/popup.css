@@ -441,7 +441,8 @@ body {
   margin-bottom: 6px;
 }
 
-.model-url-input {
+.model-url-input,
+.server-url-input {
   width: 100%;
   padding: 6px 8px;
   border-radius: 8px;
@@ -454,11 +455,13 @@ body {
   transition: border-color 0.2s;
 }
 
-.model-url-input:focus {
+.model-url-input:focus,
+.server-url-input:focus {
   border-color: #6C3CE1;
 }
 
-.model-url-input::placeholder {
+.model-url-input::placeholder,
+.server-url-input::placeholder {
   color: #4a4a60;
 }
 
