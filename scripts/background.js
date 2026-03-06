@@ -1,17 +1,8 @@
 // Background service worker for Vosk STT
-// Handles chrome.commands, offscreen doc management, and message bridging
+// Handles chrome.commands for global keyboard shortcuts
 
 // Track which tab is currently recording
 let activeRecordingTabId = null;
-let offscreenCreated = false;
-
-// Force "online" engine on extension startup or reload
-chrome.runtime.onStartup.addListener(() => {
-    chrome.storage.local.set({ engineMode: 'online' });
-});
-chrome.runtime.onInstalled.addListener(() => {
-    chrome.storage.local.set({ engineMode: 'online' });
-});
 
 // Stop recording in a specific tab, returns a Promise
 function stopTabRecording(tabId) {
@@ -23,61 +14,13 @@ function stopTabRecording(tabId) {
     });
 }
 
-/* ───── Offscreen Document Management ───── */
-
-async function ensureOffscreen() {
-    if (offscreenCreated) return;
-    try {
-        // Check if already exists
-        const contexts = await chrome.runtime.getContexts({
-            contextTypes: ['OFFSCREEN_DOCUMENT']
-        });
-        if (contexts.length > 0) {
-            offscreenCreated = true;
-            return;
-        }
-    } catch (_e) { /* getContexts may not exist in older Chrome */ }
-
-    try {
-        await chrome.offscreen.createDocument({
-            url: 'offscreen/offscreen.html',
-            reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK', 'WORKERS'],
-            justification: 'Vosk WASM speech recognition requires mic access and WebWorker in cross-origin isolated context'
-        });
-        offscreenCreated = true;
-        // Wait for offscreen doc scripts to initialize
-        await new Promise(r => setTimeout(r, 500));
-    } catch (err) {
-        if (err.message?.includes('already exists')) {
-            offscreenCreated = true;
-        } else {
-            console.error('[Vosk STT] Failed to create offscreen document:', err);
-        }
-    }
-}
-
-async function closeOffscreen() {
-    if (!offscreenCreated) return;
-    try {
-        await chrome.offscreen.closeDocument();
-    } catch (_e) { /* may already be closed */ }
-    offscreenCreated = false;
-}
-
-/* ───── Message Handling ───── */
-
 // ISSUE-13: Single consolidated onMessage listener
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // Skip messages we forwarded to the offscreen doc (avoid recursive loop)
-    if (msg.target === 'offscreen') return;
-
-    // Messages from content script
+chrome.runtime.onMessage.addListener((msg, sender) => {
     if (msg.action === 'stopped' && sender.tab) {
         if (activeRecordingTabId === sender.tab.id) {
             activeRecordingTabId = null;
         }
     }
-
     if (msg.action === 'startRecordingFromTab' && sender.tab?.id) {
         const tabId = sender.tab.id;
         (async () => {
@@ -87,76 +30,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             activeRecordingTabId = tabId;
         })();
     }
-
-    // Offline engine: forward start/stop to offscreen document
-    if (msg.action === 'vosk-offline-start') {
-        (async () => {
-            try {
-                await ensureOffscreen();
-                const resp = await chrome.runtime.sendMessage({
-                    target: 'offscreen',
-                    action: 'vosk-start',
-                    lang: msg.lang,
-                    modelUrl: msg.modelUrl,
-                    modelPath: msg.modelPath,
-                    modelId: msg.modelId
-                });
-                sendResponse(resp);
-            } catch (err) {
-                sendResponse({ ok: false, error: err.message });
-            }
-        })();
-        return true; // async
-    }
-
-    if (msg.action === 'vosk-offline-stop') {
-        (async () => {
-            try {
-                const resp = await chrome.runtime.sendMessage({
-                    target: 'offscreen',
-                    action: 'vosk-stop'
-                });
-                sendResponse(resp);
-            } catch (err) {
-                sendResponse({ ok: false, error: err.message });
-            }
-        })();
-        return true;
-    }
-
-    if (msg.action === 'vosk-load-model') {
-        (async () => {
-            try {
-                await ensureOffscreen();
-                const resp = await chrome.runtime.sendMessage({
-                    target: 'offscreen',
-                    action: 'vosk-load-model',
-                    modelUrl: msg.modelUrl,
-                    modelPath: msg.modelPath,
-                    modelId: msg.modelId
-                });
-                sendResponse(resp);
-            } catch (err) {
-                sendResponse({ ok: false, error: err.message });
-            }
-        })();
-        return true;
-    }
-
-    // Messages from offscreen document → forward to active recording tab
-    if (msg.source === 'offscreen' && activeRecordingTabId) {
-        // Forward as vosk-stt-event to the content script
-        chrome.tabs.sendMessage(activeRecordingTabId, {
-            action: 'vosk-offline-event',
-            type: msg.type,
-            data: msg
-        }).catch(() => { /* tab may be closed */ });
-    }
-
-    return true;
 });
-
-/* ───── Commands ───── */
 
 chrome.commands.onCommand.addListener(async (command) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
