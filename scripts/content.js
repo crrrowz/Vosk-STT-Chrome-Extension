@@ -19,6 +19,8 @@
     let insertDelay = 0;      // ms to buffer final text before inserting
     let insertBuffer = '';    // accumulated text during delay
     let insertTimer = null;   // debounce timer for delayed insert
+    let engineMode = 'online'; // 'online' | 'offline'
+    let modelConfig = null;   // { url, path, id } for offline Vosk model
 
     const cfg = window.VOSK_LANG_CONFIG;
 
@@ -408,16 +410,16 @@
 
         switch (type) {
             case 'started':
-                updateOverlayText('', '🎤 Speak now...');
+                updateOverlayText('', 'Speak now...');
                 setSpeaking(false);
                 break;
 
             case 'audiostart':
-                updateOverlayText('', '🎤 Listening...');
+                updateOverlayText('', 'Listening...');
                 break;
 
             case 'speechstart':
-                updateOverlayText('', '🎤 Speech detected...');
+                updateOverlayText('', 'Speech detected...');
                 setSpeaking(true);
                 break;
 
@@ -442,7 +444,7 @@
                     const preview = [insertBuffer, data.interim].filter(Boolean).join(' ');
                     updateOverlayText('', preview);
                 } else {
-                    updateOverlayText('', data.interim || (insertBuffer ? insertBuffer : '🎤 Speak now...'));
+                    updateOverlayText('', data.interim || (insertBuffer ? insertBuffer : 'Speak now...'));
                 }
 
                 setSpeaking(hasInterim);
@@ -454,7 +456,7 @@
                         const target = targetInput || resolveTargetInput();
                         if (target && insertBuffer) insertText(target, insertBuffer);
                         insertBuffer = '';
-                        updateOverlayText('', '🎤 Speak now...');
+                        updateOverlayText('', 'Speak now...');
                         insertTimer = null;
                     }, insertDelay);
                 }
@@ -473,16 +475,56 @@
                 updateOverlayLabel(lbl);
                 break;
 
+            case 'connectionStatus': {
+                const st = data.status; // 'connecting' | 'online' | 'slow' | 'offline'
+                const connClasses = ['vosk-conn-connecting', 'vosk-conn-online', 'vosk-conn-slow', 'vosk-conn-offline'];
+                const activeClass = `vosk-conn-${st}`;
+
+                // Update FAB
+                if (fab) {
+                    connClasses.forEach(c => fab.classList.remove(c));
+                    fab.classList.add(activeClass);
+                }
+
+                // Update overlay dot + status badge
+                if (overlay) {
+                    const dot = overlay.querySelector('.vosk-stt-dot');
+                    if (dot) {
+                        connClasses.forEach(c => dot.classList.remove(c));
+                        dot.classList.add(activeClass);
+                    }
+
+                    // Connection badge in header
+                    let badge = overlay.querySelector('.vosk-conn-badge');
+                    if (!badge) {
+                        badge = document.createElement('span');
+                        badge.className = 'vosk-conn-badge';
+                        const header = overlay.querySelector('.vosk-stt-header');
+                        if (header) header.appendChild(badge);
+                    }
+
+                    const badgeMap = {
+                        connecting: '',
+                        online: '',
+                        slow: 'بطيء',
+                        offline: 'لا اتصال',
+                    };
+                    badge.textContent = badgeMap[st] || '';
+                    badge.style.display = badgeMap[st] ? '' : 'none';
+                }
+                break;
+            }
+
             case 'error': {
                 const msgs = {
-                    'not-allowed': '⚠️ Allow microphone',
-                    'service-not-allowed': '⚠️ Service unavailable',
-                    'no-speech': '🔇 No speech',
-                    'audio-capture': '⚠️ No microphone',
-                    'network': '⚠️ Network error',
-                    'unsupported': '⚠️ Not supported',
+                    'not-allowed': 'Allow microphone',
+                    'service-not-allowed': 'Service unavailable',
+                    'no-speech': 'No speech',
+                    'audio-capture': 'No microphone',
+                    'network': 'Network error',
+                    'unsupported': 'Not supported',
                 };
-                updateOverlayText('', msgs[data.error] || `⚠️ ${data.error}`);
+                updateOverlayText('', msgs[data.error] || data.error);
                 if (!['no-speech', 'aborted'].includes(data.error)) {
                     setTimeout(hideOverlay, 3000);
                 }
@@ -503,7 +545,7 @@
                         setter ? setter.call(target, '') : (target.value = '');
                         target.dispatchEvent(new Event('input', { bubbles: true }));
                     }
-                    updateOverlayText('', '🗑️ Cleared');
+                    updateOverlayText('', 'Cleared');
                 } else if (data.command === 'undo' || data.command === 'delete') {
                     if (target.isContentEditable || target.getAttribute?.('role') === 'textbox') {
                         const text = target.textContent || '';
@@ -521,7 +563,7 @@
                         target.selectionStart = target.selectionEnd = nv.length;
                         target.dispatchEvent(new Event('input', { bubbles: true }));
                     }
-                    updateOverlayText('', '↩️ Deleted last word');
+                    updateOverlayText('', 'Deleted last word');
                 } else if (data.command === 'selectAll') {
                     if (target.isContentEditable || target.getAttribute?.('role') === 'textbox') {
                         const range = document.createRange();
@@ -532,7 +574,7 @@
                     } else {
                         target.select();
                     }
-                    updateOverlayText('', '✅ Selected all');
+                    updateOverlayText('', 'Selected all');
                 }
                 setSpeaking(false);
                 break;
@@ -547,10 +589,15 @@
                     const target = targetInput || resolveTargetInput();
                     if (target) insertText(target, insertBuffer);
                     insertBuffer = '';
-                    updateOverlayText('', '🎤 Speak now...');
+                    updateOverlayText('', 'Speak now...');
                     insertTimer = null;
                 }
                 updateFabState();
+                // Clean up connection status classes
+                if (fab) {
+                    ['vosk-conn-connecting', 'vosk-conn-online', 'vosk-conn-slow', 'vosk-conn-offline']
+                        .forEach(c => fab.classList.remove(c));
+                }
                 hideOverlay();
                 try { chrome.runtime.sendMessage({ action: 'stopped' }); } catch (_err) { /* tab may be closing */ }
                 if (pendingLangStart) {
@@ -579,7 +626,7 @@
 
         const badge = document.createElement('div');
         badge.id = 'vosk-picker-badge';
-        badge.textContent = '🎯 Click the target input field';
+        badge.textContent = 'Click the target input field';
         badge.style.cssText = `
             position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
             z-index: 2147483647; padding: 10px 20px; border-radius: 10px;
@@ -678,7 +725,7 @@
         textEl.className = 'vosk-stt-text';
         const partial = document.createElement('span');
         partial.className = 'partial';
-        partial.textContent = '🎤 Speak now...';
+        partial.textContent = 'Speak now...';
         textEl.appendChild(partial);
         card.appendChild(textEl);
 
@@ -762,7 +809,7 @@
         if (!final && !partial) {
             const s = document.createElement('span');
             s.className = 'partial';
-            s.textContent = '🎤 Speak now...';
+            s.textContent = 'Speak now...';
             el.appendChild(s);
         }
         schedulePositionOverlay(); // ISSUE-17: debounced
@@ -855,11 +902,43 @@
         showOverlay();
         try {
             chrome.runtime.sendMessage({ action: 'startRecordingFromTab', tabId: 'self' });
-        } catch (_err) { console.warn('[Vosk STT] startRecordingFromTab failed', _err); } // ISSUE-08, ISSUE-10
-        setTimeout(() => sendEngineCommand('start', lang), 100);
+        } catch (_err) { console.warn('[Vosk STT] startRecordingFromTab failed', _err); }
+
+        if (engineMode === 'offline') {
+            // Fetch the specific model configuration for THIS language
+            const configKey = `modelConfig_${lang}`;
+            chrome.storage?.local?.get([configKey], (r) => {
+                const langModelConfig = r[configKey];
+
+                if (!langModelConfig) {
+                    updateOverlayText('', 'No offline model loaded for ' + lang);
+                    setConnStatus('offline');
+                    return;
+                }
+
+                // Route to offscreen Vosk WASM engine
+                chrome.runtime.sendMessage({
+                    action: 'vosk-offline-start',
+                    lang,
+                    modelUrl: langModelConfig.url || '',
+                    modelPath: langModelConfig.path,
+                    modelId: langModelConfig.id
+                }, (resp) => {
+                    if (chrome.runtime.lastError || !resp?.ok) {
+                        updateOverlayText('', 'Model load failed');
+                    }
+                });
+            });
+        } else {
+            // Online: use webkitSpeechRecognition via injected speech-engine.js
+            setTimeout(() => sendEngineCommand('start', lang), 100);
+        }
     }
 
     function stopRecognition() {
+        if (engineMode === 'offline') {
+            chrome.runtime.sendMessage({ action: 'vosk-offline-stop' });
+        }
         sendEngineCommand('stop');
     }
 
@@ -867,6 +946,15 @@
 
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (msg.action === 'ping') { sendResponse({ ok: true }); return true; }
+
+        // Handle offline engine events from background.js (forwarded from offscreen doc)
+        if (msg.action === 'vosk-offline-event') {
+            const evt = new CustomEvent('vosk-stt-event', {
+                detail: { type: msg.type, ...msg.data }
+            });
+            document.dispatchEvent(evt);
+            return true;
+        }
 
         if (msg.action === 'checkFab') {
             sendResponse({ hasFab: !!fab });
@@ -936,7 +1024,7 @@
         // ISSUE-22: Show toast when stopped by another tab
         if (msg.action === 'stop') {
             if (isRecording) {
-                updateOverlayText('', '🔄 Recording moved to another tab');
+                updateOverlayText('', 'Recording moved to another tab');
                 setTimeout(() => {
                     stopRecognition();
                 }, 1200);
@@ -1008,13 +1096,15 @@
 
     // ISSUE-18 + ROAD-01: Auto-show FAB based on user preference
     if (isExtensionAlive()) {
-        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay'], (r) => {
+        chrome.storage?.local?.get(['sttLang', 'splitFab', 'fabAutoShow', 'splitLangs', 'insertDelay', 'engineMode', 'modelConfig'], (r) => {
             if (chrome.runtime.lastError) return;
             if (r?.fabAutoShow === false) return;
             currentLang = r?.sttLang || 'ar-IQ';
             splitFab = !!r?.splitFab;
             if (r?.splitLangs) splitLangs = r.splitLangs;
             if (r?.insertDelay != null) insertDelay = r.insertDelay;
+            engineMode = r?.engineMode || 'online';
+            modelConfig = r?.modelConfig || null;
             createFab();
             updateFabLang();
         });
@@ -1024,6 +1114,12 @@
             if (area !== 'local') return;
             if (changes.insertDelay) {
                 insertDelay = changes.insertDelay.newValue || 0;
+            }
+            if (changes.engineMode) {
+                engineMode = changes.engineMode.newValue || 'online';
+            }
+            if (changes.modelConfig) {
+                modelConfig = changes.modelConfig.newValue || null;
             }
             if (!changes.fabAutoShow) return;
             if (changes.fabAutoShow.newValue === false) {

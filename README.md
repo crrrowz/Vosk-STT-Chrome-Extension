@@ -55,6 +55,15 @@ git clone https://github.com/crrrowz/Vosk-STT-Chrome-Extension.git
 3. Speak — text appears live, then gets inserted
 4. Click the mic again to stop
 
+### Offline Mode (Experimental)
+
+1. Switch the STT API to **Offline (Local Vosk)** in the popup.
+2. Click **Load Model**.
+3. Select a valid Vosk model archive (`.zip` or `.tar.gz`).
+    *   *Important:* The archive **must** contain the model files (`am`, `conf`, `graph`, etc.) directly at the root of the zip file. Do not place them inside an outer wrapper folder before zipping.
+4. Wait for the model to load into the extension's IndexedDB.
+5. Click the microphone icon to start recording offline!
+
 ### Settings (Popup)
 
 | Setting | Description |
