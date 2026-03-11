@@ -45,22 +45,6 @@
             "description": "Pick input field"
         }
     },
-    "content_scripts": [
-        {
-            "matches": [
-                "http://*/*",
-                "https://*/*"
-            ],
-            "js": [
-                "scripts/languages.js",
-                "scripts/content.js"
-            ],
-            "css": [
-                "styles/content.css"
-            ],
-            "run_at": "document_idle"
-        }
-    ],
     "web_accessible_resources": [
         {
             "resources": [

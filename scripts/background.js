@@ -1,13 +1,59 @@
 // Background service worker for Vosk STT
 // Handles chrome.commands, message routing, and on-demand content script injection
 
-let activeRecordingTabId = null;
-const injectedTabs = new Set(); // Track which tabs have content script injected
+// Issue 7: Use chrome.storage.session instead of in-memory vars that get lost on SW suspend
+async function getInjectedTabs() {
+    const data = await chrome.storage.session.get('injectedTabs');
+    return new Set(data?.injectedTabs || []);
+}
 
-// On first install: set default engine to online
-chrome.runtime.onInstalled.addListener(() => {
+async function addInjectedTab(tabId) {
+    const tabs = await getInjectedTabs();
+    tabs.add(tabId);
+    await chrome.storage.session.set({ injectedTabs: Array.from(tabs) });
+}
+
+async function removeInjectedTab(tabId) {
+    const tabs = await getInjectedTabs();
+    tabs.delete(tabId);
+    await chrome.storage.session.set({ injectedTabs: Array.from(tabs) });
+}
+
+async function getActiveRecording() {
+    const data = await chrome.storage.session.get('activeRecordingTabId');
+    return data?.activeRecordingTabId || null;
+}
+
+async function setActiveRecording(tabId) {
+    await chrome.storage.session.set({ activeRecordingTabId: tabId });
+}
+
+// On SW startup/install check
+chrome.runtime.onInstalled.addListener(async () => {
     chrome.storage.local.set({ engineMode: 'online' });
+    // Clean up session state
+    await chrome.storage.session.set({ injectedTabs: [], activeRecordingTabId: null });
 });
+
+// Cleanup stale tabs on SW wake-up
+(async function cleanupStaleSessionTabs() {
+    try {
+        const injected = await getInjectedTabs();
+        const activeTabs = await chrome.tabs.query({});
+        const activeIds = new Set(activeTabs.map(t => t.id));
+
+        let changed = false;
+        for (const tid of injected) {
+            if (!activeIds.has(tid)) {
+                injected.delete(tid);
+                changed = true;
+            }
+        }
+        if (changed) {
+            await chrome.storage.session.set({ injectedTabs: Array.from(injected) });
+        }
+    } catch (_e) { }
+})();
 
 // ─── On-demand Content Script Injection ───
 
@@ -15,12 +61,13 @@ const RESTRICTED_RE = /^(chrome|edge|about|chrome-extension|devtools|file):\/\//
 
 async function injectContentScript(tabId, tabUrl) {
     if (tabUrl && RESTRICTED_RE.test(tabUrl)) return false;
-    if (injectedTabs.has(tabId)) return true;
+    const injected = await getInjectedTabs();
+    if (injected.has(tabId)) return true;
 
     try {
         // Try pinging first — script may already be there
         await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-        injectedTabs.add(tabId);
+        await addInjectedTab(tabId);
         return true;
     } catch (_err) {
         // Not injected yet, inject now
@@ -34,7 +81,7 @@ async function injectContentScript(tabId, tabUrl) {
                 files: ['styles/content.css']
             });
             await new Promise(r => setTimeout(r, 150));
-            injectedTabs.add(tabId);
+            await addInjectedTab(tabId);
             return true;
         } catch (_err2) {
             return false;
@@ -48,17 +95,21 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (!tab.url || RESTRICTED_RE.test(tab.url)) return;
 
     try {
-        const r = await chrome.storage.local.get(['fabAutoShow']);
+        const r = await chrome.storage.local.get('fabAutoShow');
         if (r?.fabAutoShow === false) return;
+
+        // Remove from set so we re-inject properly on reload
+        await removeInjectedTab(tabId);
         await injectContentScript(tabId, tab.url);
     } catch (_err) { }
 });
 
-// Clean up injection tracking when tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
-    injectedTabs.delete(tabId);
-    if (activeRecordingTabId === tabId) {
-        activeRecordingTabId = null;
+// Clean up injection tracking// Clean up tracked tabs on close
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+    await removeInjectedTab(tabId);
+    const activeId = await getActiveRecording();
+    if (activeId === tabId) {
+        await setActiveRecording(null);
     }
 });
 
@@ -76,48 +127,64 @@ function stopTabRecording(tabId) {
 // ─── Message Handling ───
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.action === 'stopped' && sender.tab) {
-        if (activeRecordingTabId === sender.tab.id) {
-            activeRecordingTabId = null;
+    if (msg.action === 'startRecordingFromTab') {
+        const tabId = msg.tabId === 'self' && sender.tab ? sender.tab.id : msg.tabId;
+        if (tabId) {
+            (async () => {
+                const activeId = await getActiveRecording();
+                if (activeId && activeId !== tabId) {
+                    try { await chrome.tabs.sendMessage(activeId, { action: 'stop' }); } catch (_e) { }
+                }
+                await setActiveRecording(tabId);
+                sendResponse({ ok: true });
+            })();
+            return true;
         }
     }
-
-    if (msg.action === 'startRecordingFromTab' && sender.tab?.id) {
-        const tabId = sender.tab.id;
+    if (msg.action === 'stopped') {
         (async () => {
-            if (activeRecordingTabId && activeRecordingTabId !== tabId) {
-                await stopTabRecording(activeRecordingTabId);
+            const activeId = await getActiveRecording();
+            if (sender.tab && sender.tab.id === activeId) {
+                await setActiveRecording(null);
             }
-            activeRecordingTabId = tabId;
+            sendResponse({ ok: true });
         })();
+        return true;
     }
-
     return true;
 });
 
-// ─── Commands ───
+// ─── Keyboard Shortcuts ───
 
 chrome.commands.onCommand.addListener(async (command) => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return;
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || RESTRICTED_RE.test(tab.url)) {
+            console.warn('[Vosk STT] Cannot inject into this page (chrome://, edge://, etc.)');
+            return;
+        }
 
-    const injected = await injectContentScript(tab.id, tab.url);
-    if (!injected) return;
+        const success = await injectContentScript(tab.id, tab.url);
+        if (!success) {
+            console.warn('[Vosk STT] Injection failed for tab', tab.id);
+            return;
+        }
 
-    switch (command) {
-        case 'toggle-recording':
-            if (activeRecordingTabId && activeRecordingTabId !== tab.id) {
-                await stopTabRecording(activeRecordingTabId);
-                activeRecordingTabId = null;
+        if (command === 'toggle-recording') {
+            const activeId = await getActiveRecording();
+            if (activeId && activeId !== tab.id) {
+                await stopTabRecording(activeId);
             }
-            activeRecordingTabId = tab.id;
-            chrome.tabs.sendMessage(tab.id, { action: 'toggleRecording' });
-            break;
-        case 'switch-language':
-            chrome.tabs.sendMessage(tab.id, { action: 'switchLang' });
-            break;
-        case 'pick-input':
-            chrome.tabs.sendMessage(tab.id, { action: 'pickInput' });
-            break;
+            await setActiveRecording(tab.id);
+            await chrome.tabs.sendMessage(tab.id, { action: 'toggleRecording' });
+
+        } else if (command === 'switch-language') {
+            await chrome.tabs.sendMessage(tab.id, { action: 'switchLang' });
+
+        } else if (command === 'pick-input') {
+            await chrome.tabs.sendMessage(tab.id, { action: 'pickInput' });
+        }
+    } catch (err) {
+        console.warn('[Vosk STT] Command failed:', err);
     }
 });
