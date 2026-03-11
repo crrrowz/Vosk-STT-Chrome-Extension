@@ -34,6 +34,13 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("vosk-server")
 
+# ─── Connection Limits ───
+
+MAX_CONNECTIONS = 3
+SESSION_TIMEOUT = 300  # 5 minutes max per session
+_conn_semaphore = asyncio.Semaphore(MAX_CONNECTIONS)
+_active_connections = 0
+
 # ─── Model Management ───
 
 _loaded_models = {}   # path -> Model (cache)
@@ -65,12 +72,7 @@ def scan_models(base_dir):
 
 def _extract_lang(dirname):
     """Extract 2-letter language code from model directory name."""
-    # Common patterns:
-    #   vosk-model-ar-0.22-linto-1.1.0
-    #   vosk-model-small-en-us-0.15
-    #   vosk-model-small-ar-0.22
     parts = dirname.replace("vosk-model-", "").split("-")
-    # Skip size prefixes like 'small', 'big', 'large'
     skip = {"small", "big", "large", "medium", "cn", "spk"}
     for p in parts:
         if len(p) == 2 and p.isalpha() and p not in skip:
@@ -111,89 +113,123 @@ def get_model(model_path):
 # ─── WebSocket Handler ───
 
 async def handle_client(websocket):
-    """Handle one WebSocket client connection."""
+    """Handle one WebSocket client connection with limits."""
+    global _active_connections
     peer = websocket.remote_address
-    log.info(f"Client connected: {peer}")
-    recognizer = None
 
-    try:
-        async for message in websocket:
-            # ── Text message: control commands ──
-            if isinstance(message, str):
-                try:
-                    cmd = json.loads(message)
-                except json.JSONDecodeError:
-                    await websocket.send(json.dumps({"type": "status", "status": "error", "msg": "Invalid JSON"}))
-                    continue
+    # Check connection limit
+    if not _conn_semaphore._value:
+        log.warning(f"Connection rejected (limit {MAX_CONNECTIONS}): {peer}")
+        await websocket.send(json.dumps({
+            "type": "status", "status": "error",
+            "msg": f"Server full ({MAX_CONNECTIONS} max connections)"
+        }))
+        await websocket.close()
+        return
 
-                action = cmd.get("action", "")
-
-                if action == "configure":
-                    lang = cmd.get("lang", cmd.get("model", ""))
-                    sample_rate = cmd.get("sampleRate", 16000)
-
-                    model_path = resolve_model_path(lang)
-
-                    if not model_path:
-                        available = list(_model_map.keys())
-                        await websocket.send(json.dumps({
-                            "type": "status", "status": "error",
-                            "msg": f"No model for '{lang}'. Available: {available}"
-                        }))
-                        continue
-
-                    try:
-                        model = get_model(model_path)
-                        recognizer = KaldiRecognizer(model, sample_rate)
-                        recognizer.SetWords(True)
-                        log.info(f"Recognizer ready: {lang} → {os.path.basename(model_path)} @ {sample_rate}Hz")
-                        await websocket.send(json.dumps({
-                            "type": "status", "status": "ready",
-                            "msg": f"Model loaded: {os.path.basename(model_path)}"
-                        }))
-                    except Exception as e:
-                        log.error(f"Model load error: {e}")
-                        await websocket.send(json.dumps({
-                            "type": "status", "status": "error", "msg": str(e)
-                        }))
-
-                elif action == "stop":
-                    if recognizer:
-                        final = json.loads(recognizer.FinalResult())
-                        text = final.get("text", "").strip()
-                        if text:
-                            await websocket.send(json.dumps({"type": "result", "text": text}))
-                        recognizer = None
-                    await websocket.send(json.dumps({"type": "status", "status": "stopped"}))
-
-                elif action == "ping":
-                    await websocket.send(json.dumps({
-                        "type": "status", "status": "pong",
-                        "models": list(_model_map.keys())
-                    }))
-
-            # ── Binary message: audio data ──
-            elif isinstance(message, bytes):
-                if not recognizer:
-                    continue
-                if recognizer.AcceptWaveform(message):
-                    result = json.loads(recognizer.Result())
-                    text = result.get("text", "").strip()
-                    if text:
-                        await websocket.send(json.dumps({"type": "result", "text": text}))
-                else:
-                    partial = json.loads(recognizer.PartialResult())
-                    text = partial.get("partial", "").strip()
-                    if text:
-                        await websocket.send(json.dumps({"type": "partial", "text": text}))
-
-    except websockets.ConnectionClosed:
-        log.info(f"Client disconnected: {peer}")
-    except Exception as e:
-        log.error(f"Client error: {e}")
-    finally:
+    async with _conn_semaphore:
+        _active_connections += 1
+        log.info(f"Client connected: {peer} (active: {_active_connections}/{MAX_CONNECTIONS})")
         recognizer = None
-        log.info(f"Session ended: {peer}")
+
+        try:
+            # Session timeout
+            async with asyncio.timeout(SESSION_TIMEOUT):
+                async for message in websocket:
+                    # ── Text message: control commands ──
+                    if isinstance(message, str):
+                        try:
+                            cmd = json.loads(message)
+                        except json.JSONDecodeError:
+                            await websocket.send(json.dumps({"type": "status", "status": "error", "msg": "Invalid JSON"}))
+                            continue
+
+                        action = cmd.get("action", "")
+
+                        if action == "configure":
+                            lang = cmd.get("lang", cmd.get("model", ""))
+                            sample_rate = cmd.get("sampleRate", 16000)
+
+                            model_path = resolve_model_path(lang)
+
+                            if not model_path:
+                                available = list(_model_map.keys())
+                                await websocket.send(json.dumps({
+                                    "type": "status", "status": "error",
+                                    "msg": f"No model for '{lang}'. Available: {available}"
+                                }))
+                                continue
+
+                            try:
+                                model = get_model(model_path)
+                                recognizer = KaldiRecognizer(model, sample_rate)
+                                recognizer.SetWords(True)
+                                log.info(f"Recognizer ready: {lang} → {os.path.basename(model_path)} @ {sample_rate}Hz")
+                                await websocket.send(json.dumps({
+                                    "type": "status", "status": "ready",
+                                    "msg": f"Model loaded: {os.path.basename(model_path)}"
+                                }))
+                            except Exception as e:
+                                log.error(f"Model load error: {e}")
+                                await websocket.send(json.dumps({
+                                    "type": "status", "status": "error", "msg": str(e)
+                                }))
+
+                        elif action == "stop":
+                            if recognizer:
+                                final = json.loads(recognizer.FinalResult())
+                                text = final.get("text", "").strip()
+                                if text:
+                                    await websocket.send(json.dumps({"type": "result", "text": text}))
+                                recognizer = None
+                            await websocket.send(json.dumps({"type": "status", "status": "stopped"}))
+
+                        elif action == "ping":
+                            await websocket.send(json.dumps({
+                                "type": "status", "status": "pong",
+                                "models": list(_model_map.keys()),
+                                "connections": f"{_active_connections}/{MAX_CONNECTIONS}"
+                            }))
+
+                    # ── Binary message: audio data ──
+                    elif isinstance(message, bytes):
+                        if not recognizer:
+                            continue
+                        if recognizer.AcceptWaveform(message):
+                            result = json.loads(recognizer.Result())
+                            text = result.get("text", "").strip()
+                            if text:
+                                await websocket.send(json.dumps({"type": "result", "text": text}))
+                        else:
+                            partial = json.loads(recognizer.PartialResult())
+                            text = partial.get("partial", "").strip()
+                            if text:
+                                # Backpressure: skip partials if send buffer is congested
+                                try:
+                                    await asyncio.wait_for(
+                                        websocket.send(json.dumps({"type": "partial", "text": text})),
+                                        timeout=0.5
+                                    )
+                                except asyncio.TimeoutError:
+                                    pass  # Drop partial, keep processing
+
+        except TimeoutError:
+            log.warning(f"Session timeout ({SESSION_TIMEOUT}s): {peer}")
+            try:
+                await websocket.send(json.dumps({
+                    "type": "status", "status": "error",
+                    "msg": f"Session timeout ({SESSION_TIMEOUT}s)"
+                }))
+            except Exception:
+                pass
+        except websockets.ConnectionClosed:
+            log.info(f"Client disconnected: {peer}")
+        except Exception as e:
+            log.error(f"Client error: {e}")
+        finally:
+            recognizer = None
+            _active_connections -= 1
+            log.info(f"Session ended: {peer} (active: {_active_connections}/{MAX_CONNECTIONS})")
 
 # ─── Main ───
 
@@ -216,8 +252,15 @@ async def main(port, models_base):
         except NotImplementedError:
             pass  # Windows
 
-    async with websockets.serve(handle_client, "localhost", port):
+    async with websockets.serve(
+        handle_client, "localhost", port,
+        max_size=65536,          # 64KB max message size
+        max_queue=16,            # Limit queued messages
+        close_timeout=5,         # 5s close timeout
+    ):
         log.info(f"✅ Vosk server listening on ws://localhost:{port}")
+        log.info(f"   Max connections: {MAX_CONNECTIONS}")
+        log.info(f"   Session timeout: {SESSION_TIMEOUT}s")
         log.info(f"   Press Ctrl+C to stop")
         try:
             await stop
@@ -230,7 +273,12 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765, help="WebSocket port (default: 8765)")
     parser.add_argument("--models", type=str, default="./models",
                         help="Models directory (default: ./models)")
+    parser.add_argument("--max-conn", type=int, default=3,
+                        help="Max concurrent connections (default: 3)")
     args = parser.parse_args()
+
+    MAX_CONNECTIONS = args.max_conn
+    _conn_semaphore = asyncio.Semaphore(MAX_CONNECTIONS)
 
     try:
         asyncio.run(main(args.port, args.models))

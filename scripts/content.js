@@ -57,9 +57,12 @@
     /* ───── Inject Speech Engine ───── */
 
     let engineInjected = false;
+    let _audioNonce = ''; // Shared secret for postMessage authentication
+
     function injectSpeechEngine() {
         if (engineInjected) return;
         engineInjected = true;
+        _audioNonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
         // Inject shared language registry into main world first
         const oldLang = document.getElementById('vosk-stt-languages');
         if (oldLang) oldLang.remove();
@@ -91,6 +94,8 @@
                 const engine = document.createElement('script');
                 engine.id = 'vosk-stt-engine';
                 engine.src = chrome.runtime.getURL('scripts/speech-engine.js');
+                engine.dataset.workletUrl = chrome.runtime.getURL('scripts/pcm-processor.js'); // Issue 4
+                engine.dataset.audioNonce = _audioNonce; // Issue 3
                 (document.head || document.documentElement).appendChild(engine);
             });
         };
@@ -932,6 +937,8 @@
 
     let _localWs = null;
     let _wsClosedIntentionally = false;
+    let _wsParseErrors = 0;
+    let _wsMsgCount = 0;
 
     document.addEventListener('vosk-local-control', (e) => {
         const cmd = e.detail;
@@ -963,10 +970,31 @@
             };
 
             _localWs.onmessage = (ev) => {
+                // Issue 7: Handle binary messages separately
+                if (ev.data instanceof Blob || ev.data instanceof ArrayBuffer) {
+                    console.warn('[Vosk Bridge] Received unexpected binary message');
+                    return;
+                }
                 try {
                     const msg = JSON.parse(ev.data);
+                    _wsParseErrors = 0; // Reset on success
+                    _wsMsgCount++;
+                    if (_wsMsgCount % 100 === 0) {
+                        console.log(`[Vosk Bridge] ${_wsMsgCount} messages processed`);
+                    }
                     _emitServerMsg(msg);
-                } catch (_e) { }
+                } catch (_e) {
+                    _wsParseErrors++;
+                    const preview = String(ev.data).slice(0, 200);
+                    console.warn(`[Vosk Bridge] JSON parse error #${_wsParseErrors}: ${preview}`);
+                    if (_wsParseErrors >= 3) {
+                        console.error('[Vosk Bridge] 3 consecutive parse errors, reconnecting');
+                        _emitServerMsg({ type: 'status', status: 'ws-closed' });
+                        try { _localWs.close(); } catch (_err) { }
+                        _localWs = null;
+                        _wsParseErrors = 0;
+                    }
+                }
             };
 
             _localWs.onerror = () => {
@@ -1003,7 +1031,16 @@
         }
     });
 
-    // Forward audio data from speech-engine to WebSocket
+    // Issue 2 & 3: Forward audio data from speech-engine to WebSocket via authenticated postMessage
+    window.addEventListener('message', (e) => {
+        // Authenticate origin and nonce to prevent arbitrary page script injection
+        if (e.origin !== window.location.origin) return;
+        if (e.data && e.data.__voskAudio && e.data.nonce === _audioNonce && _localWs && _localWs.readyState === WebSocket.OPEN) {
+            _localWs.send(e.data.buffer);
+        }
+    });
+
+    // Legacy fallback: still listen to CustomEvent for backward compatibility
     document.addEventListener('vosk-audio-data', (e) => {
         if (_localWs && _localWs.readyState === WebSocket.OPEN && e.detail) {
             _localWs.send(e.detail);

@@ -6,7 +6,8 @@
     "permissions": [
         "activeTab",
         "storage",
-        "scripting"
+        "scripting",
+        "tabs"
     ],
     "background": {
         "service_worker": "scripts/background.js"
@@ -65,7 +66,8 @@
             "resources": [
                 "scripts/languages.js",
                 "scripts/lang/*.js",
-                "scripts/speech-engine.js"
+                "scripts/speech-engine.js",
+                "scripts/pcm-processor.js"
             ],
             "matches": [
                 "http://*/*",

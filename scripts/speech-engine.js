@@ -14,11 +14,31 @@
     let onlineRestartCount = 0;
     let localRestartCount = 0;
     let stopGeneration = 0;
-    const MAX_RESTARTS = 20;
+    const MAX_RESTARTS = 50;
     let lastActivityTime = 0;
     let watchdogTimer = null;
     let pendingRestart = false;
     const WATCHDOG_INTERVAL = 10000;
+
+    // Circuit breaker: track rapid restarts within a window
+    let _restartTimestamps = [];
+    const CIRCUIT_BREAKER_WINDOW = 30000; // 30s
+    const CIRCUIT_BREAKER_MAX = 8;        // max restarts in window
+    let _circuitBreakerCooldown = null;
+
+    function isCircuitBroken() {
+        const now = Date.now();
+        _restartTimestamps = _restartTimestamps.filter(t => now - t < CIRCUIT_BREAKER_WINDOW);
+        if (_restartTimestamps.length >= CIRCUIT_BREAKER_MAX) {
+            console.warn(`[Vosk Engine] Circuit breaker: ${CIRCUIT_BREAKER_MAX} restarts in ${CIRCUIT_BREAKER_WINDOW / 1000}s, cooling down`);
+            return true;
+        }
+        return false;
+    }
+
+    function recordRestart() {
+        _restartTimestamps.push(Date.now());
+    }
 
     // Local server mic state (WebSocket managed by content.js bridge)
     let localStream = null;
@@ -248,11 +268,18 @@
         return score;
     }
 
-    const MIN_CONFIDENCE = 0.3;
+    const MIN_CONFIDENCE = 0.0; // Always insert text — user wants all speech captured
 
     let _engineMode = 'online';
     let _serverUrl = 'ws://localhost:8765';
     let _autoWinner = null; // 'online' | 'local' — set when first final result arrives in auto mode
+    let _autoFinalLock = false; // Mutex: prevents concurrent final result processing
+    let _autoSelectTimer = null; // 5s timeout to auto-select if only one engine responds
+    let _autoOnlinePartials = 0; // Track partial result counts per engine
+    let _autoLocalPartials = 0;
+
+    // Issue 3: Nonce for postMessage authentication
+    const _audioNonce = (document.getElementById('vosk-stt-engine')?.dataset?.audioNonce) || '';
 
     function startRecognition(lang) {
         if (!shouldBeRunning) return;
@@ -260,9 +287,39 @@
         if (_engineMode === 'auto') {
             // Race both engines — first final result wins
             _autoWinner = null;
+            _autoFinalLock = false;
+            clearTimeout(_autoSelectTimer);
             console.log('[Vosk Engine] AUTO mode: racing Online + Local');
             startLocalRecognition(lang, _serverUrl);
             startOnlineRecognition(lang);
+
+            // Auto-select: track partial counts, pick winner after 5s
+            _autoOnlinePartials = 0;
+            _autoLocalPartials = 0;
+            _autoSelectTimer = setTimeout(() => {
+                if (_autoWinner || !shouldBeRunning) return;
+                let winner = null;
+                if (_autoOnlinePartials > 0 && _autoLocalPartials === 0) {
+                    winner = 'online';
+                } else if (_autoLocalPartials > 0 && _autoOnlinePartials === 0) {
+                    winner = 'local';
+                } else if (_autoOnlinePartials > 0 && _autoLocalPartials > 0) {
+                    winner = 'online'; // prefer online when tied
+                } else {
+                    // Neither engine produced results
+                    console.warn('[Vosk Engine] AUTO: neither engine produced results in 5s');
+                    emit('error', { error: 'no-engine', message: 'No speech engine responded' });
+                    return;
+                }
+                console.log(`[Vosk Engine] AUTO: 5s timeout, selecting ${winner} (online=${_autoOnlinePartials}, local=${_autoLocalPartials})`);
+                _autoWinner = winner;
+                emit('autoModeResolved', { winner });
+                if (winner === 'online') {
+                    stopLocalRecognition();
+                } else {
+                    if (recognition) { try { recognition.abort(); } catch (_e) { } recognition = null; }
+                }
+            }, 5000);
         } else if (_engineMode === 'offline') {
             startLocalRecognition(lang, _serverUrl);
         } else {
@@ -273,14 +330,22 @@
     /**
      * In auto mode, check if this source should emit results.
      * Returns true if this source is allowed to emit.
-     * Sets winner on first final result.
+     * Sets winner on first final result. Uses a mutex to prevent races.
      */
     function autoGate(source, isFinal) {
         if (_engineMode !== 'auto') return true; // not auto mode, always allow
         if (_autoWinner) return _autoWinner === source; // winner already decided
+
         if (isFinal) {
+            // Mutex: only one final result can be processed at a time
+            if (_autoFinalLock) return false; // another source is already being processed
+            _autoFinalLock = true;
+
             _autoWinner = source;
+            clearTimeout(_autoSelectTimer);
             console.log(`[Vosk Engine] AUTO winner: ${source}`);
+            emit('autoModeResolved', { winner: source });
+
             // Stop the loser
             if (source === 'online') {
                 stopLocalRecognition();
@@ -344,7 +409,24 @@
                     }
                     const silentMs = Date.now() - lastActivityTime;
                     if (silentMs > WATCHDOG_INTERVAL * 3) {
-                        console.warn('[Vosk Engine] Local watchdog: server stale, reconnecting');
+                        // Issue 5: Apply circuit breaker to local watchdog
+                        localRestartCount++;
+                        if (localRestartCount >= MAX_RESTARTS || isCircuitBroken()) {
+                            console.error('[Vosk Engine] Local watchdog: circuit breaker tripped, stopping');
+                            clearInterval(_localWatchdog);
+                            _localWatchdog = null;
+                            stopLocalRecognition();
+                            if (_engineMode === 'auto') {
+                                _autoWinner = 'online';
+                                emit('autoModeResolved', { winner: 'online' });
+                            } else {
+                                emit('error', { error: 'server-unavailable', message: 'Vosk server not responding' });
+                                setConnStatus('offline');
+                            }
+                            return;
+                        }
+                        recordRestart();
+                        console.warn(`[Vosk Engine] Local watchdog: server stale, reconnecting (#${localRestartCount})`);
                         clearInterval(_localWatchdog);
                         _localWatchdog = null;
                         stopLocalRecognition();
@@ -405,6 +487,7 @@
             }
         } else if (msg.type === 'partial' && msg.text) {
             if (!autoGate('local', false)) return;
+            _autoLocalPartials++; // Issue 2: track for auto-select
             emit('result', { final: '', interim: msg.text, preview: '' });
         }
     }
@@ -418,22 +501,49 @@
             localContext = new AudioContext({ sampleRate: 16000 });
             const source = localContext.createMediaStreamSource(localStream);
 
-            localProcessor = localContext.createScriptProcessor(2048, 1, 1);
-            localProcessor.onaudioprocess = (e) => {
-                if (!_localMicActive) return;
-                const float32 = e.inputBuffer.getChannelData(0);
-                const pcm16 = new Int16Array(float32.length);
-                for (let i = 0; i < float32.length; i++) {
-                    pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
-                }
-                // Send audio to content.js which forwards to WebSocket
-                document.dispatchEvent(new CustomEvent('vosk-audio-data', {
-                    detail: pcm16.buffer
-                }));
-            };
+            // Try AudioWorklet first (runs on dedicated audio thread, no drops)
+            let workletLoaded = false;
+            if (localContext.audioWorklet) {
+                try {
+                    // Issue 4: Read worklet URL from data attribute (set by content.js)
+                    const engineScript = document.getElementById('vosk-stt-engine');
+                    const workletUrl = engineScript?.dataset?.workletUrl
+                        || (engineScript?.src ? engineScript.src.replace('speech-engine.js', 'pcm-processor.js') : null);
+                    if (!workletUrl) throw new Error('No worklet URL available');
 
-            source.connect(localProcessor);
-            localProcessor.connect(localContext.destination);
+                    await localContext.audioWorklet.addModule(workletUrl);
+                    const workletNode = new AudioWorkletNode(localContext, 'pcm-processor');
+                    workletNode.port.onmessage = (e) => {
+                        if (!_localMicActive) return;
+                        // Issue 3: Include nonce for authentication
+                        window.postMessage({ __voskAudio: true, nonce: _audioNonce, buffer: e.data }, '*', [e.data]);
+                    };
+                    source.connect(workletNode);
+                    workletNode.connect(localContext.destination);
+                    localProcessor = workletNode;
+                    workletLoaded = true;
+                    console.log('[Vosk Engine] AudioWorklet mic capture active (zero main-thread blocking)');
+                } catch (workletErr) {
+                    console.warn('[Vosk Engine] AudioWorklet failed, falling back to ScriptProcessor:', workletErr.message);
+                }
+            }
+
+            // Fallback: ScriptProcessorNode (deprecated but widely supported)
+            if (!workletLoaded) {
+                localProcessor = localContext.createScriptProcessor(2048, 1, 1);
+                localProcessor.onaudioprocess = (e) => {
+                    if (!_localMicActive) return;
+                    const float32 = e.inputBuffer.getChannelData(0);
+                    const pcm16 = new Int16Array(float32.length);
+                    for (let i = 0; i < float32.length; i++) {
+                        pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
+                    }
+                    window.postMessage({ __voskAudio: true, nonce: _audioNonce, buffer: pcm16.buffer }, '*', [pcm16.buffer]);
+                };
+                source.connect(localProcessor);
+                localProcessor.connect(localContext.destination);
+                console.log('[Vosk Engine] ScriptProcessor fallback mic capture active');
+            }
 
             _localMicActive = true;
             localRestartCount = 0;
@@ -495,22 +605,17 @@
                 return;
             }
             const silentMs = Date.now() - lastActivityTime;
-            if (silentMs > WATCHDOG_INTERVAL * 2) {
-                setConnStatus('offline');
-            } else if (silentMs > WATCHDOG_INTERVAL) {
+            if (silentMs > WATCHDOG_INTERVAL * 3) {
                 setConnStatus('slow');
-            }
-            if (silentMs > WATCHDOG_INTERVAL && recognition) {
-                console.warn(`[Vosk Engine] Watchdog: ${silentMs}ms silent, force-restarting (restart #${onlineRestartCount + 1})`);
-                try { recognition.abort(); } catch (_e) { }
-                recognition = null;
+                // Don't force-abort — let recognition end naturally
+                // The Web Speech API will fire onend when it times out
             }
         }, WATCHDOG_INTERVAL);
 
         recognition.onstart = () => {
             console.log('[Vosk Engine] recognition.onstart fired');
             pendingRestart = false;
-            onlineRestartCount = 0;
+            // Do NOT reset onlineRestartCount here — only reset on actual speech
             emit('started', {});
         };
         recognition.onaudiostart = () => {
@@ -519,7 +624,8 @@
         };
         recognition.onspeechstart = () => {
             console.log('[Vosk Engine] recognition.onspeechstart fired');
-            onlineRestartCount = 0;
+            onlineRestartCount = 0; // Reset only when real speech is detected
+            _restartTimestamps = []; // Clear circuit breaker on real speech
             emit('speechstart', {});
         };
 
@@ -542,10 +648,8 @@
             for (let i = 0; i < event.results.length; i++) {
                 if (event.results[i].isFinal) {
                     const best = pickBestAlternative(event.results[i], lang);
-                    if ((best.confidence || 1) < MIN_CONFIDENCE) {
-                        emit('result', { final: '', interim: `[low confidence] ${best.transcript}`, preview: '' });
-                        continue;
-                    }
+                    // Always accept text — never skip due to confidence
+                    onlineRestartCount = 0; // Got real result, reset counter
                     allFinal += best.transcript;
                 } else {
                     const best = pickBestAlternative(event.results[i], lang);
@@ -570,17 +674,13 @@
                 }
             } else {
                 if (!autoGate('online', false)) return;
+                _autoOnlinePartials++; // Issue 2: track for auto-select
                 lastInterim = interim;
                 emit('result', { final: '', interim: interim, preview: '' });
             }
 
-            if (interim.trim() && shouldBeRunning) {
-                shortPauseTimer = setTimeout(() => {
-                    if (recognition && shouldBeRunning) {
-                        try { recognition.stop(); } catch (_err) { }
-                    }
-                }, 3000);
-            }
+            // Issue 1: Removed shortPauseTimer — let Web Speech API manage
+            // its own continuous mode pauses. The watchdog handles dead sessions.
         };
 
         recognition.onerror = (event) => {
@@ -590,6 +690,7 @@
             if (event.error === 'network') {
                 networkErrorCount++;
                 setConnStatus(networkErrorCount >= 3 ? 'offline' : 'slow');
+                // Don't stop — let onend handle seamless restart
                 return;
             }
             emit('error', { error: event.error });
@@ -603,6 +704,7 @@
             clearInterval(watchdogTimer);
             watchdogTimer = null;
 
+            // Flush any pending interim text as final — never lose speech
             const pendingInterim = lastInterim.trim();
             lastInterim = '';
             if (pendingInterim && myGeneration === stopGeneration && shouldBeRunning && autoGate('online', true)) {
@@ -620,28 +722,46 @@
                 emit('stopped', {});
                 return;
             }
-            if (shouldBeRunning && onlineRestartCount < MAX_RESTARTS) {
+
+            // Seamless silent restart — keep capturing voice continuously
+            if (shouldBeRunning) {
+                // Check circuit breaker before restarting
+                if (isCircuitBroken()) {
+                    // Cool down: wait 10s then try again
+                    if (!_circuitBreakerCooldown) {
+                        setConnStatus('slow');
+                        emit('result', { final: '', interim: 'Reconnecting...', preview: '' });
+                        _circuitBreakerCooldown = setTimeout(() => {
+                            _circuitBreakerCooldown = null;
+                            _restartTimestamps = [];
+                            onlineRestartCount = 0;
+                            if (shouldBeRunning && myGeneration === stopGeneration) {
+                                startRecognition(currentLang);
+                            }
+                        }, 10000);
+                    }
+                    return;
+                }
+
                 if (pendingRestart) return;
                 pendingRestart = true;
                 onlineRestartCount++;
-                const delay = Math.min(500 * Math.pow(2, onlineRestartCount - 1), 5000);
+                recordRestart();
+
+                // Fast restart — minimal delay for seamless experience
+                const delay = Math.min(200 * onlineRestartCount, 3000);
                 setTimeout(() => {
                     pendingRestart = false;
                     if (shouldBeRunning && myGeneration === stopGeneration) {
-                        // Auto mode: only restart online part (local is still running)
                         if (_engineMode === 'auto') {
                             if (!_autoWinner || _autoWinner === 'online') {
                                 startOnlineRecognition(currentLang);
                             }
-                            // If local won, no need to restart online
                         } else {
                             startRecognition(currentLang);
                         }
                     }
                 }, delay);
-            } else if (shouldBeRunning) {
-                shouldBeRunning = false;
-                emit('stopped', {});
             } else {
                 setConnStatus('offline');
                 emit('stopped', {});
@@ -664,6 +784,9 @@
         _autoWinner = null;
         onlineRestartCount = 0;
         localRestartCount = 0;
+        _restartTimestamps = [];
+        clearTimeout(_circuitBreakerCooldown);
+        _circuitBreakerCooldown = null;
         clearInterval(watchdogTimer);
         watchdogTimer = null;
         stopLocalRecognition();

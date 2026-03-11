@@ -1,14 +1,69 @@
 // Background service worker for Vosk STT
-// Handles chrome.commands and message routing
+// Handles chrome.commands, message routing, and on-demand content script injection
 
 let activeRecordingTabId = null;
+const injectedTabs = new Set(); // Track which tabs have content script injected
 
 // On first install: set default engine to online
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({ engineMode: 'online' });
 });
 
-// Stop recording in a specific tab
+// ─── On-demand Content Script Injection ───
+
+const RESTRICTED_RE = /^(chrome|edge|about|chrome-extension|devtools|file):\/\//;
+
+async function injectContentScript(tabId, tabUrl) {
+    if (tabUrl && RESTRICTED_RE.test(tabUrl)) return false;
+    if (injectedTabs.has(tabId)) return true;
+
+    try {
+        // Try pinging first — script may already be there
+        await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+        injectedTabs.add(tabId);
+        return true;
+    } catch (_err) {
+        // Not injected yet, inject now
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId },
+                files: ['scripts/languages.js', 'scripts/content.js']
+            });
+            await chrome.scripting.insertCSS({
+                target: { tabId },
+                files: ['styles/content.css']
+            });
+            await new Promise(r => setTimeout(r, 150));
+            injectedTabs.add(tabId);
+            return true;
+        } catch (_err2) {
+            return false;
+        }
+    }
+}
+
+// Auto-inject on navigation when fabAutoShow is enabled
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (changeInfo.status !== 'complete') return;
+    if (!tab.url || RESTRICTED_RE.test(tab.url)) return;
+
+    try {
+        const r = await chrome.storage.local.get(['fabAutoShow']);
+        if (r?.fabAutoShow === false) return;
+        await injectContentScript(tabId, tab.url);
+    } catch (_err) { }
+});
+
+// Clean up injection tracking when tab is closed
+chrome.tabs.onRemoved.addListener((tabId) => {
+    injectedTabs.delete(tabId);
+    if (activeRecordingTabId === tabId) {
+        activeRecordingTabId = null;
+    }
+});
+
+// ─── Stop Recording in a Tab ───
+
 function stopTabRecording(tabId) {
     return new Promise((resolve) => {
         chrome.tabs.sendMessage(tabId, { action: 'stop' }, () => {
@@ -18,7 +73,7 @@ function stopTabRecording(tabId) {
     });
 }
 
-/* ───── Message Handling ───── */
+// ─── Message Handling ───
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'stopped' && sender.tab) {
@@ -40,22 +95,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
 });
 
-/* ───── Commands ───── */
+// ─── Commands ───
 
 chrome.commands.onCommand.addListener(async (command) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
 
-    // Ensure content script is injected
-    try {
-        await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
-    } catch (_err) {
-        try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['scripts/languages.js', 'scripts/content.js'] });
-            await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['styles/content.css'] });
-            await new Promise(r => setTimeout(r, 150));
-        } catch (_err2) { return; }
-    }
+    const injected = await injectContentScript(tab.id, tab.url);
+    if (!injected) return;
 
     switch (command) {
         case 'toggle-recording':
@@ -72,12 +119,5 @@ chrome.commands.onCommand.addListener(async (command) => {
         case 'pick-input':
             chrome.tabs.sendMessage(tab.id, { action: 'pickInput' });
             break;
-    }
-});
-
-// Clean up when a tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
-    if (activeRecordingTabId === tabId) {
-        activeRecordingTabId = null;
     }
 });
